@@ -1,0 +1,61 @@
+<div id="stats" hx-get="/stats" hx-trigger="taskUpdate from:body" hx-swap="outerHTML swap:1s">
+    <div class="stat-item">
+        <span class="stat-label">Radar</span>
+        <span class="stat-value">{{ radar }}</span>
+    </div>
+    <div class="stat-item">
+        <span class="stat-label">Todo</span>
+        <span class="stat-value">{{ todo }}</span>
+    </div>
+    <div class="stat-item">
+        <span class="stat-label">In Progress</span>
+        <span class="stat-value">{{ in_progress }}</span>
+    </div>
+    <div class="stat-item">
+        <span class="stat-label">Done</span>
+        <span class="stat-value">{{ done }}</span>
+    </div>
+    {% if total_estimated_minutes > 0 %}
+        <div class="stat-item full-width">
+            <span class="stat-label">Total Est.</span>
+            <span class="stat-value">
+                {% set hours = total_estimated_minutes // 60 %}
+                {% set mins = total_estimated_minutes % 60 %}
+                {{ hours }}h {{ mins }}m
+            </span>
+        </div>
+    {% endif %}
+</div>
+
+<style>
+    #stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: var(--spacing-sm);
+    }
+
+    .stat-item {
+        display: flex;
+        justify-content: space-between;
+        padding: var(--spacing-sm);
+        background-color: var(--bg-alt);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        font-size: 0.75rem;
+    }
+
+    .stat-item.full-width {
+        grid-column: 1 / -1;
+    }
+
+    .stat-label {
+        color: var(--text-dim);
+        font-weight: 500;
+    }
+
+    .stat-value {
+        color: var(--amber);
+        font-weight: 600;
+        font-family: var(--font-mono);
+    }
+</style>

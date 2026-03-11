@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Radar·Runway</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <h1 class="logo">Radar·Runway</h1>
+        </div>
+        <div class="header-right">
+            <button id="sync-btn" class="btn btn-secondary" hx-post="/sync" hx-indicator="#sync-spinner">
+                <span class="spinner" id="sync-spinner" style="display: none;">⟳</span>
+                Sync
+            </button>
+            <button id="export-btn" class="btn btn-secondary" onclick="exportObsidian()">
+                Export
+            </button>
+        </div>
+    </header>
+
+    <main class="main">
+        {% block content %}{% endblock %}
+    </main>
+
+    <aside class="sidebar">
+        <div class="sidebar-section">
+            <h3>Stats</h3>
+            <div id="stats" hx-get="/stats" hx-trigger="load, taskUpdate from:body" hx-swap="outerHTML">
+                Loading...
+            </div>
+        </div>
+        <div class="sidebar-section">
+            <h3>Logs</h3>
+            <div id="logs" class="logs-container" hx-get="/logs?limit=50" hx-trigger="load, log from:body" hx-swap="outerHTML">
+                Loading...
+            </div>
+        </div>
+    </aside>
+
+    <script src="/static/app.js"></script>
+    <script>
+        // Broadcast events when WebSocket updates come in
+        let ws = null;
+
+        function connectWS() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'task_created' || msg.type === 'task_updated' || msg.type === 'task_deleted' || msg.type === 'log') {
+                    // Trigger HTMX refresh on task/log changes
+                    htmx.trigger('#stats', 'taskUpdate');
+                }
+            };
+
+            ws.onerror = (event) => {
+                console.error('WebSocket error:', event);
+            };
+
+            ws.onclose = () => {
+                // Reconnect after 1 second
+                setTimeout(connectWS, 1000);
+            };
+        }
+
+        connectWS();
+
+        async function exportObsidian() {
+            const response = await fetch('/export/obsidian');
+            const text = await response.text();
+            const blob = new Blob([text], { type: 'text/markdown' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'Radar-Runway.md';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>
