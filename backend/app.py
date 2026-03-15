@@ -8,6 +8,7 @@ from sqlmodel import SQLModel
 from backend.api import ai, environments, tasks
 from backend.config import settings
 from backend.database import engine
+from backend.mcp import router as mcp_router
 
 
 @asynccontextmanager
@@ -42,6 +43,7 @@ app.add_middleware(
 app.include_router(tasks.router)
 app.include_router(environments.router)
 app.include_router(ai.router)
+app.include_router(mcp_router.router)
 
 
 @app.get("/")
