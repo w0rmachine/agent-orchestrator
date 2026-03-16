@@ -1,4 +1,5 @@
 """Configuration management using pydantic-settings."""
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,7 +19,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # Obsidian
-    obsidian_vault_path: str = "~/Documents/Obsidian/TODO.md"
+    obsidian_vault_path: str = "/home/mwu/Documents/notes/Work/TODO.md"
 
     # AI
     anthropic_api_key: str = ""

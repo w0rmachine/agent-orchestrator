@@ -16,7 +16,15 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Create database tables
     SQLModel.metadata.create_all(engine)
+
+    # Start markdown sync service
+    from backend.sync.sync_service import sync_service
+    await sync_service.start()
+
     yield
+
+    # Stop sync service on shutdown
+    await sync_service.stop()
 
 
 app = FastAPI(

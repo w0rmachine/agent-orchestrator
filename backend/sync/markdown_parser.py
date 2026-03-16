@@ -6,24 +6,45 @@ from backend.models.task import TaskStatus
 
 # Regex patterns
 TASK_RE = re.compile(r"^(\s*)- \[([x ])\] (.+)$")
-# Match TASK-001, TASK-001-A, TASK-001-B-1, etc.
+# Match TASK-001, TASK-001-A, TASK-001-B-1, etc. in HTML comments
 ID_RE = re.compile(r"<!--\s*([A-Z]+-\d+(?:-[A-Z0-9]+)*)\s*-->")
+# Match [O-001], [TASK-001], etc. in brackets at start of title
+BRACKET_ID_RE = re.compile(r"^\[([A-Z]+-\d+(?:-[A-Z0-9]+)*)\]")
 TAG_RE = re.compile(r"#(\w+)")
 
 # Map section headers to task status
 HEADER_TO_STATUS = {
     "radar": TaskStatus.RADAR,
+    "backlog": TaskStatus.RADAR,
+    "todo": TaskStatus.RUNWAY,
     "runway": TaskStatus.RUNWAY,
+    "in progress": TaskStatus.FLIGHT,
     "flight": TaskStatus.FLIGHT,
     "blocked": TaskStatus.BLOCKED,
+    "waiting": TaskStatus.BLOCKED,
+    "waiting / blocked": TaskStatus.BLOCKED,
     "done": TaskStatus.DONE,
 }
 
 
 def extract_task_id(line: str) -> str | None:
-    """Extract task ID from HTML comment."""
+    """Extract task ID from HTML comment or bracket notation.
+
+    Supports both formats:
+    - HTML comment: "Task title <!-- TASK-001 -->"
+    - Bracket notation: "[O-001] Task title"
+    """
+    # Try HTML comment first
     match = ID_RE.search(line)
-    return match.group(1) if match else None
+    if match:
+        return match.group(1)
+
+    # Try bracket notation
+    match = BRACKET_ID_RE.search(line)
+    if match:
+        return match.group(1)
+
+    return None
 
 
 def extract_tags(line: str) -> list[str]:
@@ -88,8 +109,9 @@ def parse_markdown_file(filepath: str) -> list[dict[str, Any]]:
         if not task_code:
             continue
 
-        # Remove ID comment from content
+        # Remove ID comment or bracket from content
         title = ID_RE.sub("", content).strip()
+        title = BRACKET_ID_RE.sub("", title).strip()
 
         # Extract tags
         tags = extract_tags(title)

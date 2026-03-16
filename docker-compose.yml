@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:16
@@ -47,7 +45,8 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./alembic.ini:/app/alembic.ini
-    command: uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
+      - /home/mwu/Documents/notes:/home/mwu/Documents/notes
+    command: uv run uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
 
   worker:
     build:
@@ -64,7 +63,22 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app/backend
-    command: rq worker --url redis://redis:6379/0
+    command: uv run rq worker ai_tasks --url redis://redis:6379/0
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: ai-kanban-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - api
 
 volumes:
   pgdata:
