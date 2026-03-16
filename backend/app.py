@@ -2,7 +2,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel, Session, select
@@ -100,6 +100,34 @@ def sync_status():
         "db_task_count": db_task_count,
         "parse_error": parse_error,
     }
+
+
+@app.get("/kanban/files")
+def list_kanban_files():
+    """List available markdown kanban files and current selection."""
+    from backend.sync.sync_service import sync_service
+
+    return {
+        "current": str(sync_service.vault_path),
+        "files": sync_service.list_available_vault_files(),
+    }
+
+
+@app.post("/kanban/select")
+async def select_kanban_file(payload: dict):
+    """Switch active markdown kanban file context."""
+    path = payload.get("path") if isinstance(payload, dict) else None
+    if not path:
+        raise HTTPException(status_code=400, detail="Missing 'path'")
+
+    from backend.sync.sync_service import sync_service
+
+    try:
+        await sync_service.switch_vault_file(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"status": "ok", "current": str(sync_service.vault_path)}
 
 
 @app.post("/sync")

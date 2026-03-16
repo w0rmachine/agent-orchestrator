@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 from backend.database import get_session
 from backend.models.task import Task, TaskStatus
 from backend.models.task_event import TaskEvent, TaskEventType
+from backend.tagging import sanitize_tags
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -29,6 +30,9 @@ class TaskCreate(BaseModel):
     status: TaskStatus = TaskStatus.RADAR
     tags: list[str] = []
     location_tags: list[str] = []
+    phase: str | None = None
+    due_date: str | None = None
+    repo_path: str | None = None
     environment_id: UUID | None = None
     parent_task_id: UUID | None = None
 
@@ -42,6 +46,9 @@ class TaskUpdate(BaseModel):
     priority: int | None = None
     tags: list[str] | None = None
     location_tags: list[str] | None = None
+    phase: str | None = None
+    due_date: str | None = None
+    repo_path: str | None = None
     estimated_minutes: int | None = None
 
 
@@ -56,6 +63,10 @@ class TaskResponse(BaseModel):
     priority: int | None
     tags: list[str]
     location_tags: list[str]
+    phase: str | None = None
+    app_stage: str | None = None
+    due_date: str | None = None
+    repo_path: str | None = None
     environment_id: UUID | None
     parent_task_id: UUID | None
     ai_generated: bool
@@ -66,13 +77,88 @@ class TaskResponse(BaseModel):
     completed_at: datetime | None
 
 
+META_PREFIXES = ("phase:", "due:", "repo:")
+
+
+def _extract_meta(location_tags: list[str]) -> tuple[str | None, str | None, str | None]:
+    phase = None
+    due_date = None
+    repo_path = None
+
+    for tag in location_tags:
+        if tag.startswith("phase:"):
+            phase = tag.removeprefix("phase:")
+        elif tag.startswith("due:"):
+            due_date = tag.removeprefix("due:")
+        elif tag.startswith("repo:"):
+            repo_path = tag.removeprefix("repo:")
+
+    return phase, due_date, repo_path
+
+
+def _merge_location_tags(
+    current: list[str],
+    new_tags: list[str] | None,
+    phase: str | None,
+    due_date: str | None,
+    repo_path: str | None,
+) -> list[str]:
+    base = list(new_tags) if new_tags is not None else list(current)
+    base = [t for t in base if not t.startswith(META_PREFIXES)]
+
+    if phase:
+        base.append(f"phase:{phase}")
+    if due_date:
+        base.append(f"due:{due_date}")
+    if repo_path:
+        base.append(f"repo:{repo_path}")
+
+    return base
+
+
+def _derive_app_stage(status: TaskStatus) -> str:
+    if status in (TaskStatus.RADAR, TaskStatus.RUNWAY):
+        return "backlog"
+    if status == TaskStatus.FLIGHT:
+        return "active"
+    if status == TaskStatus.DONE:
+        return "done"
+    return "blocked"
+
+
+def _to_response(task: Task) -> TaskResponse:
+    phase, due_date, repo_path = _extract_meta(task.location_tags or [])
+    return TaskResponse(
+        id=task.id,
+        task_code=task.task_code,
+        title=task.title,
+        description=task.description,
+        status=task.status,
+        priority=task.priority,
+        tags=task.tags,
+        location_tags=task.location_tags,
+        phase=phase,
+        app_stage=_derive_app_stage(task.status),
+        due_date=due_date,
+        repo_path=repo_path,
+        environment_id=task.environment_id,
+        parent_task_id=task.parent_task_id,
+        ai_generated=task.ai_generated,
+        estimated_minutes=task.estimated_minutes,
+        order=task.order,
+        created_at=task.created_at,
+        updated_at=task.updated_at,
+        completed_at=task.completed_at,
+    )
+
+
 @router.get("/", response_model=list[TaskResponse])
 def list_tasks(
     session: Annotated[Session, Depends(get_session)],
     status: TaskStatus | None = Query(None),
     environment_id: UUID | None = Query(None),
     parent_task_id: UUID | None = Query(None),
-) -> list[Task]:
+) -> list[TaskResponse]:
     """List tasks with optional filters."""
     query = select(Task)
 
@@ -84,26 +170,26 @@ def list_tasks(
         query = query.where(Task.parent_task_id == parent_task_id)
 
     tasks = session.exec(query).all()
-    return list(tasks)
+    return [_to_response(t) for t in tasks]
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
 def get_task(
     task_id: UUID,
     session: Annotated[Session, Depends(get_session)],
-) -> Task:
+) -> TaskResponse:
     """Get a single task."""
     task = session.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return task
+    return _to_response(task)
 
 
 @router.post("/", response_model=TaskResponse, status_code=201)
 async def create_task(
     data: TaskCreate,
     session: Annotated[Session, Depends(get_session)],
-) -> Task:
+) -> TaskResponse:
     """Create a new task."""
     # Check if task_code is unique
     existing = session.exec(
@@ -119,8 +205,14 @@ async def create_task(
         title=data.title,
         description=data.description,
         status=data.status,
-        tags=data.tags,
-        location_tags=data.location_tags,
+        tags=sanitize_tags(data.tags),
+        location_tags=_merge_location_tags(
+            [],
+            data.location_tags,
+            data.phase,
+            data.due_date,
+            data.repo_path,
+        ),
         environment_id=data.environment_id,
         parent_task_id=data.parent_task_id,
     )
@@ -138,7 +230,7 @@ async def create_task(
     session.commit()
     session.refresh(task)
     await _sync_markdown()
-    return task
+    return _to_response(task)
 
 
 @router.patch("/{task_id}", response_model=TaskResponse)
@@ -146,7 +238,7 @@ async def update_task(
     task_id: UUID,
     data: TaskUpdate,
     session: Annotated[Session, Depends(get_session)],
-) -> Task:
+) -> TaskResponse:
     """Update a task."""
     task = session.get(Task, task_id)
     if not task:
@@ -157,7 +249,19 @@ async def update_task(
     # Update fields
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
+        if field in {"phase", "due_date", "repo_path"}:
+            continue
+        if field == "tags":
+            value = sanitize_tags(value)
         setattr(task, field, value)
+
+    task.location_tags = _merge_location_tags(
+        task.location_tags,
+        data.location_tags,
+        data.phase,
+        data.due_date,
+        data.repo_path,
+    )
 
     task.updated_at = datetime.now(timezone.utc)
 
@@ -182,7 +286,7 @@ async def update_task(
     session.commit()
     session.refresh(task)
     await _sync_markdown()
-    return task
+    return _to_response(task)
 
 
 @router.delete("/{task_id}", status_code=204)
@@ -205,7 +309,7 @@ async def move_task(
     task_id: UUID,
     status: TaskStatus,
     session: Annotated[Session, Depends(get_session)],
-) -> Task:
+) -> TaskResponse:
     """Move a task to a different status."""
     task = session.get(Task, task_id)
     if not task:
@@ -234,4 +338,4 @@ async def move_task(
     session.commit()
     session.refresh(task)
     await _sync_markdown()
-    return task
+    return _to_response(task)

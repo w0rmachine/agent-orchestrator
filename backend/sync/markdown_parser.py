@@ -3,6 +3,7 @@ import re
 from typing import Any
 
 from backend.models.task import TaskStatus
+from backend.tagging import sanitize_tags
 
 # Regex patterns
 TASK_RE = re.compile(r"^(\s*)- \[([x ])\] (.+)$")
@@ -162,7 +163,7 @@ def parse_markdown_file(filepath: str, auto_generate_ids: bool = True) -> list[d
         title = BRACKET_ID_RE.sub("", title).strip()
 
         # Extract tags
-        tags = extract_tags(title)
+        tags = sanitize_tags(extract_tags(title))
 
         # Remove tags from title
         title = TAG_RE.sub("", title).strip()

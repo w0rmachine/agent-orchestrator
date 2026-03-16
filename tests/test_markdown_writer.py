@@ -37,9 +37,9 @@ def test_generate_basic_markdown():
     markdown = generate_markdown(tasks)
 
     # Check structure
-    assert "## Radar" in markdown
-    assert "## Runway" in markdown
-    assert "## Done" in markdown
+    assert "## RADAR" in markdown
+    assert "## RUNWAY" in markdown
+    assert "## DONE" in markdown
 
     # Check tasks
     assert "- [ ] Setup authentication #backend <!-- TASK-001 -->" in markdown
@@ -105,11 +105,11 @@ def test_generate_empty_sections():
     markdown = generate_markdown(tasks)
 
     # All sections should be present
-    assert "## Radar" in markdown
-    assert "## Runway" in markdown
-    assert "## Flight" in markdown
-    assert "## Blocked" in markdown
-    assert "## Done" in markdown
+    assert "## RADAR" in markdown
+    assert "## RUNWAY" in markdown
+    assert "## FLIGHT" in markdown
+    assert "## BLOCKED" in markdown
+    assert "## DONE" in markdown
 
     # Empty sections should have placeholder
     assert "*No tasks*" in markdown

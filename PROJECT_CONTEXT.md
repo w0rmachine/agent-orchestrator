@@ -33,6 +33,11 @@ Updated: 2026-03-16
 - Dashboard/frontend
   - Active UI is `frontend/dashboard.jsx` via `frontend/src/App.jsx`.
   - Dashboard was rewired from legacy `/tickets` to `/tasks` + `/sync/status`.
+  - Workflow column is phase-driven (`phase` in `location_tags`), not tag-driven.
+  - Reserved orchestration labels are stripped from task tags at ingest/write:
+    - `manager`
+    - `coder`
+    - `analyzer`
   - Added warning banners for:
     - missing vault file
     - parse errors
@@ -60,6 +65,31 @@ Updated: 2026-03-16
 ## Codex MCP Registration (current)
 - Use DB-backed MCP server (no `TASK_STORE_PATH` needed):
   - `codex mcp add agent-orchestrator -- bash -lc "cd /home/mwu/Work/projects/agent-orchestrator && uv run mcp-server"`
+
+## MCP Live Validation (for future sessions)
+- Use this exact prompt with Codex after MCP is connected:
+  - `Validate the agent-orchestrator MCP live using the PROJECT_CONTEXT.md MCP checklist. Create, read, update, filter, complete, block, and delete a temporary task and verify markdown sync expectations.`
+- Validation checklist (via MCP tools, not direct DB edits):
+  1. `list_tasks` baseline count and confirm IDs are `task_code` style (for example `O-024` / `MCP-0001`).
+  2. `create_task` with `context.phase`, `context.due_date`, `context.repo_path`, plus tags/priority.
+  3. `get_task` for the new task and verify returned context fields are present.
+  4. `update_task` to change title/priority/tags/context and verify with `get_task`.
+  5. `start_task` then verify status becomes `in_progress`.
+  6. `complete_task` then verify status becomes `done`.
+  7. `block_task` on a second temporary task and verify status `blocked`.
+  8. `list_tasks` filters:
+     - by `status`
+     - by `priority`
+     - by `tags`
+     - by `phase`
+  9. `delete_task` cleanup for every temporary task created during validation.
+- Kanban/markdown sync expectation after MCP mutation:
+  - New and updated tasks should appear in the currently selected vault Kanban file after sync cycle.
+  - If mismatch is observed, also check API `GET /sync/status` and selected file via `/kanban/select` flow.
+- Definition of done:
+  - All MCP CRUD + workflow transitions succeed.
+  - Filters return expected subsets.
+  - No leftover temporary tasks remain.
 
 ## Notes / Caveats
 - Older docs (`README.md`, `MCP_SETUP.md`, `QUICKSTART.md`) still mention JSON-backed MCP (`tasks.json`). They are now partially outdated.

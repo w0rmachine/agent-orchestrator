@@ -178,6 +178,23 @@ Parameters:
 
 ## Usage Examples
 
+## MCP Live Test Section
+
+After registering the MCP in Codex, run this instruction in a new session:
+
+```text
+Validate the agent-orchestrator MCP live using the PROJECT_CONTEXT.md MCP checklist. Create, read, update, filter, complete, block, and delete a temporary task and verify markdown sync expectations.
+```
+
+Expected coverage:
+- MCP CRUD: `create_task`, `get_task`, `update_task`, `delete_task`
+- Workflow helpers: `start_task`, `complete_task`, `block_task`
+- Filter behavior: `list_tasks` by status/priority/tags/phase
+- Context fields: `phase`, `due_date`, `repo_path`
+- No leftover temporary tasks after validation
+
+If sync behavior looks wrong, additionally verify `GET /sync/status` and active Kanban file selection.
+
 ### Work Session Example
 
 ```bash

@@ -13,6 +13,7 @@ from backend.models.task import Task, TaskStatus
 from backend.models.task_event import TaskEvent, TaskEventType
 from backend.services.ai_service import classify_and_prioritize_task, split_task_into_subtasks
 from backend.services.markdown_service import IDGenerator
+from backend.tagging import sanitize_tags
 
 # Initialize Redis and RQ
 redis_conn = Redis.from_url(settings.redis_url)
@@ -47,7 +48,7 @@ def process_task_ai_analysis(task_id: str) -> dict:
         # Update task with AI analysis
         task.priority = analysis["priority"]
         task.estimated_minutes = analysis["estimated_minutes"]
-        task.tags = list(set(task.tags + analysis["suggested_tags"]))
+        task.tags = sanitize_tags(task.tags + analysis["suggested_tags"])
 
         # Log event
         event = TaskEvent(
@@ -96,7 +97,7 @@ def process_task_ai_analysis(task_id: str) -> dict:
                     title=subtask_data["title"],
                     description=subtask_data.get("description", ""),
                     status=TaskStatus.RUNWAY,
-                    tags=subtask_data.get("tags", []),
+                    tags=sanitize_tags(subtask_data.get("tags", [])),
                     estimated_minutes=subtask_data.get("estimated_minutes"),
                     order=task.order + i + 1,
                     parent_task_id=task.id,

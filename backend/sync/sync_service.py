@@ -3,11 +3,14 @@ import asyncio
 import contextlib
 from pathlib import Path
 
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from backend.config import settings
 from backend.database import engine
 from backend.models.task import Task, TaskStatus
+from backend.models.ai_session import AISession
+from backend.models.task_event import TaskEvent
+from backend.models.task_path import TaskPath
 from backend.sync.markdown_parser import parse_markdown_file
 from backend.sync.markdown_writer import generate_markdown
 from backend.sync.merge import merge_task, should_delete_task
@@ -23,8 +26,74 @@ class SyncService:
         self.watcher: VaultWatcher | None = None
         self._poll_task: asyncio.Task | None = None
         self._last_seen_hash: str = ""
+        self._switch_lock = asyncio.Lock()
         self.running = False
         self.syncing = False  # Prevent concurrent syncs
+
+    def _template_content(self) -> str:
+        """Default markdown template for new vault files."""
+        return "# AI Kanban Dashboard\n\n## RADAR\n\n## RUNWAY\n\n## FLIGHT\n\n## BLOCKED\n\n## DONE\n"
+
+    def _ensure_vault_file(self):
+        """Ensure active vault file exists."""
+        if not self.vault_path.exists():
+            print(f"Creating vault file at {self.vault_path}")
+            self.vault_path.parent.mkdir(parents=True, exist_ok=True)
+            self.vault_path.write_text(self._template_content())
+
+    async def _stop_watchers(self):
+        """Stop watcher + polling tasks."""
+        if self._poll_task and not self._poll_task.done():
+            self._poll_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._poll_task
+            self._poll_task = None
+
+        if self.watcher:
+            self.watcher.stop()
+            self.watcher = None
+
+    def _start_watchers(self):
+        """Start watcher + polling tasks for current vault."""
+        self.watcher = VaultWatcher(
+            str(self.vault_path),
+            self._on_vault_changed,
+        )
+        self.watcher.start()
+        self._poll_task = asyncio.create_task(self._poll_for_changes())
+
+    def list_available_vault_files(self) -> list[str]:
+        """List available markdown vault files in current vault directory."""
+        directory = self.vault_path.parent
+        files = sorted(str(p) for p in directory.glob("*.md"))
+        current = str(self.vault_path)
+        if current not in files:
+            files.append(current)
+            files.sort()
+        return files
+
+    async def switch_vault_file(self, new_path: str):
+        """Switch active kanban markdown file and resync context."""
+        target = Path(new_path).expanduser()
+        if target.suffix.lower() != ".md":
+            raise ValueError("Vault file must be a .md file")
+
+        async with self._switch_lock:
+            if target == self.vault_path:
+                return
+
+            was_running = self.running
+            if was_running:
+                await self._stop_watchers()
+
+            self.vault_path = target
+            self._ensure_vault_file()
+
+            await self._sync_from_vault()
+            self._last_seen_hash = compute_file_hash(str(self.vault_path))
+
+            if was_running:
+                self._start_watchers()
 
     async def start(self):
         """Start the sync service."""
@@ -36,38 +105,20 @@ class SyncService:
             return
 
         # Ensure vault file exists
-        if not self.vault_path.exists():
-            print(f"Creating vault file at {self.vault_path}")
-            self.vault_path.parent.mkdir(parents=True, exist_ok=True)
-            self.vault_path.write_text("# AI Kanban Dashboard\n\n## RADAR\n\n## RUNWAY\n\n## FLIGHT\n\n## BLOCKED\n\n## DONE\n")
+        self._ensure_vault_file()
 
         # Do initial sync from vault to DB
         await self._sync_from_vault()
         self._last_seen_hash = compute_file_hash(str(self.vault_path))
 
         # Start watching for changes
-        self.watcher = VaultWatcher(
-            str(self.vault_path),
-            self._on_vault_changed,
-        )
-        self.watcher.start()
-
-        # Polling fallback for environments where file events are missed
-        self._poll_task = asyncio.create_task(self._poll_for_changes())
+        self._start_watchers()
         self.running = True
         print(f"Sync service started, watching {self.vault_path}")
 
     async def stop(self):
         """Stop the sync service."""
-        if self._poll_task and not self._poll_task.done():
-            self._poll_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._poll_task
-            self._poll_task = None
-
-        if self.watcher:
-            self.watcher.stop()
-            self.watcher = None
+        await self._stop_watchers()
         self.running = False
         print("Sync service stopped")
 
@@ -165,9 +216,30 @@ class SyncService:
                         db_tasks_by_code[task_code] = new_task
 
                 # Delete tasks that were removed from markdown (if manually created)
-                for task_code, db_task in db_tasks_by_code.items():
-                    if task_code not in processed_codes and should_delete_task(db_task):
-                        print(f"Deleting task removed from markdown: {task_code}")
+                tasks_to_delete = [
+                    db_task
+                    for task_code, db_task in db_tasks_by_code.items()
+                    if task_code not in processed_codes and should_delete_task(db_task)
+                ]
+
+                if tasks_to_delete:
+                    ids_to_delete = [t.id for t in tasks_to_delete]
+
+                    # Detach kept children from soon-to-be-deleted parents
+                    maybe_orphans = session.exec(
+                        select(Task).where(Task.parent_task_id.in_(ids_to_delete))  # type: ignore[arg-type]
+                    ).all()
+                    for orphan in maybe_orphans:
+                        if orphan.id not in ids_to_delete:
+                            orphan.parent_task_id = None
+
+                    # Delete dependent rows first to satisfy FK constraints
+                    session.exec(delete(TaskEvent).where(TaskEvent.task_id.in_(ids_to_delete)))  # type: ignore[arg-type]
+                    session.exec(delete(AISession).where(AISession.task_id.in_(ids_to_delete)))  # type: ignore[arg-type]
+                    session.exec(delete(TaskPath).where(TaskPath.task_id.in_(ids_to_delete)))  # type: ignore[arg-type]
+
+                    for db_task in tasks_to_delete:
+                        print(f"Deleting task removed from markdown: {db_task.task_code}")
                         session.delete(db_task)
 
                 session.commit()

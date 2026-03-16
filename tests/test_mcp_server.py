@@ -1,641 +1,289 @@
-"""Tests for MCP server task management."""
-import json
-import os
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
+"""Tests for MCP server (DB-backed task store)."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from uuid import UUID
 
 import pytest
+from sqlmodel import SQLModel, Session, create_engine, select
+from sqlmodel.pool import StaticPool
 
-from backend.mcp_server import Task, TaskStore, app, call_tool, list_tools, store
+import backend.models  # Ensure all SQLModel tables are registered
+from backend.mcp_server import Task, TaskStore, call_tool, list_tools
+from backend.models.task import Task as DBTask
 
 
-class TestTask:
-    """Tests for Task model."""
+@pytest.fixture
+def mcp_test_db(monkeypatch):
+    """Provide isolated in-memory DB and disable markdown side effects."""
+    from backend import mcp_server
 
-    def test_task_default_id(self):
-        """Test that tasks get auto-generated IDs."""
-        task = Task(title="Test task")
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+
+    async def _noop_sync() -> None:
+        return None
+
+    monkeypatch.setattr(mcp_server, "engine", engine)
+    monkeypatch.setattr(mcp_server, "_sync_markdown", _noop_sync)
+
+    return engine
+
+
+class TestTaskModel:
+    def test_defaults(self):
+        task = Task(title="Test")
 
         assert task.id.startswith("T-")
-        assert len(task.id) == 8  # T- + 6 chars
-
-    def test_task_default_values(self):
-        """Test task default values."""
-        task = Task(title="Test task")
-
-        assert task.title == "Test task"
-        assert task.description == ""
         assert task.status == "todo"
         assert task.priority == "normal"
         assert task.tags == []
-        assert task.parent_id is None
-        assert task.subtask_ids == []
         assert task.context == {}
-        assert task.order == 0
-
-    def test_task_with_all_fields(self):
-        """Test creating task with all fields."""
-        task = Task(
-            id="T-CUSTOM",
-            title="Custom task",
-            description="A detailed description",
-            status="in_progress",
-            priority="high",
-            tags=["backend", "urgent"],
-            parent_id="T-PARENT",
-            subtask_ids=["T-SUB1", "T-SUB2"],
-            context={"repo": "test/repo", "branch": "main"},
-            order=5,
-        )
-
-        assert task.id == "T-CUSTOM"
-        assert task.title == "Custom task"
-        assert task.description == "A detailed description"
-        assert task.status == "in_progress"
-        assert task.priority == "high"
-        assert task.tags == ["backend", "urgent"]
-        assert task.parent_id == "T-PARENT"
-        assert task.subtask_ids == ["T-SUB1", "T-SUB2"]
-        assert task.context == {"repo": "test/repo", "branch": "main"}
-        assert task.order == 5
+        assert isinstance(task.created, datetime)
+        assert isinstance(task.updated, datetime)
 
 
 class TestTaskStore:
-    """Tests for TaskStore class."""
-
-    @pytest.fixture
-    def temp_store_path(self):
-        """Create a temporary file for task storage."""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
-            filepath = f.name
-        yield filepath
-        Path(filepath).unlink(missing_ok=True)
-
-    def test_create_task(self, temp_store_path):
-        """Test creating a task."""
-        store = TaskStore(temp_store_path)
-
-        task = store.create_task(
-            title="New task",
-            description="Task description",
+    def test_create_and_get_task_by_code_and_uuid(self, mcp_test_db):
+        store = TaskStore()
+        created = store.create_task(
+            title="Implement endpoint",
+            description="Add /health check",
             priority="high",
-            tags=["backend"],
-            context={"branch": "feature/test"},
+            tags=["backend", "api"],
+            context={"phase": "analyze", "due_date": "2026-03-20", "repo_path": "/repo"},
         )
 
-        assert task.title == "New task"
-        assert task.description == "Task description"
-        assert task.priority == "high"
-        assert task.tags == ["backend"]
-        assert task.context == {"branch": "feature/test"}
-        assert task.id in store.tasks
+        assert created.id.startswith("MCP-")
+        assert created.status == "todo"
+        assert created.priority == "high"
+        assert created.phase == "analyze"
+        assert created.due_date == "2026-03-20"
+        assert created.repo_path == "/repo"
 
-    def test_create_task_with_defaults(self, temp_store_path):
-        """Test creating a task with default values."""
-        store = TaskStore(temp_store_path)
+        by_code = store.get_task(created.id)
+        assert by_code is not None
+        assert by_code.title == "Implement endpoint"
 
-        task = store.create_task(title="Simple task")
+        with Session(mcp_test_db) as session:
+            row = session.exec(select(DBTask).where(DBTask.task_code == created.id)).first()
+            assert row is not None
+            by_uuid = store.get_task(str(row.id))
 
-        assert task.title == "Simple task"
-        assert task.description == ""
-        assert task.priority == "normal"
-        assert task.tags == []
-        assert task.context == {}
+        assert by_uuid is not None
+        assert by_uuid.id == created.id
 
-    def test_get_task(self, temp_store_path):
-        """Test retrieving a task by ID."""
-        store = TaskStore(temp_store_path)
-        task = store.create_task(title="Test task")
+    def test_list_and_filters(self, mcp_test_db):
+        store = TaskStore()
+        first = store.create_task(
+            title="Analyze bug",
+            priority="critical",
+            tags=["bug", "backend"],
+            context={"phase": "analyze"},
+        )
+        second = store.create_task(
+            title="Implement fix",
+            priority="normal",
+            tags=["backend"],
+            context={"phase": "active"},
+        )
+        third = store.create_task(
+            title="Release",
+            priority="low",
+            tags=["ops"],
+            context={"phase": "deploy"},
+        )
 
-        retrieved = store.get_task(task.id)
+        store.update_task(second.id, status="in_progress")
+        store.update_task(third.id, status="done")
 
-        assert retrieved is not None
-        assert retrieved.id == task.id
-        assert retrieved.title == "Test task"
+        assert len(store.list_tasks()) == 3
+        assert [task.id for task in store.list_tasks(status="todo")] == [first.id]
+        assert [task.id for task in store.list_tasks(status="in_progress")] == [second.id]
+        assert [task.id for task in store.list_tasks(status="done")] == [third.id]
+        assert [task.id for task in store.list_tasks(priority="critical")] == [first.id]
+        assert {task.id for task in store.list_tasks(tags=["backend"])} == {first.id, second.id}
+        assert [task.id for task in store.list_tasks(phase="active")] == [second.id]
 
-    def test_get_nonexistent_task(self, temp_store_path):
-        """Test retrieving a nonexistent task."""
-        store = TaskStore(temp_store_path)
-
-        retrieved = store.get_task("T-NONEXISTENT")
-
-        assert retrieved is None
-
-    def test_list_tasks_all(self, temp_store_path):
-        """Test listing all tasks."""
-        store = TaskStore(temp_store_path)
-        store.create_task(title="Task 1")
-        store.create_task(title="Task 2")
-        store.create_task(title="Task 3")
-
-        tasks = store.list_tasks()
-
-        assert len(tasks) == 3
-
-    def test_list_tasks_by_status(self, temp_store_path):
-        """Test filtering tasks by status."""
-        store = TaskStore(temp_store_path)
-        task1 = store.create_task(title="Task 1")
-        task2 = store.create_task(title="Task 2")
-        store.update_task(task2.id, status="in_progress")
-
-        todo_tasks = store.list_tasks(status="todo")
-        in_progress_tasks = store.list_tasks(status="in_progress")
-
-        assert len(todo_tasks) == 1
-        assert len(in_progress_tasks) == 1
-
-    def test_list_tasks_by_priority(self, temp_store_path):
-        """Test filtering tasks by priority."""
-        store = TaskStore(temp_store_path)
-        store.create_task(title="Normal task", priority="normal")
-        store.create_task(title="High task", priority="high")
-        store.create_task(title="Critical task", priority="critical")
-
-        high_tasks = store.list_tasks(priority="high")
-
-        assert len(high_tasks) == 1
-        assert high_tasks[0].title == "High task"
-
-    def test_list_tasks_by_tags(self, temp_store_path):
-        """Test filtering tasks by tags."""
-        store = TaskStore(temp_store_path)
-        store.create_task(title="Backend task", tags=["backend", "api"])
-        store.create_task(title="Frontend task", tags=["frontend", "ui"])
-        store.create_task(title="Full stack task", tags=["backend", "frontend"])
-
-        backend_tasks = store.list_tasks(tags=["backend"])
-
-        assert len(backend_tasks) == 2
-
-    def test_list_tasks_sorted_by_order(self, temp_store_path):
-        """Test that tasks are sorted by order."""
-        store = TaskStore(temp_store_path)
-        task1 = store.create_task(title="First")
-        task2 = store.create_task(title="Second")
-        task3 = store.create_task(title="Third")
-
-        store.update_task(task3.id, order=0)
-        store.update_task(task1.id, order=2)
-        store.update_task(task2.id, order=1)
-
-        tasks = store.list_tasks()
-
-        assert tasks[0].title == "Third"
-        assert tasks[1].title == "Second"
-        assert tasks[2].title == "First"
-
-    def test_update_task(self, temp_store_path):
-        """Test updating task fields."""
-        store = TaskStore(temp_store_path)
-        task = store.create_task(title="Original title")
+    def test_update_and_delete(self, mcp_test_db):
+        store = TaskStore()
+        created = store.create_task(title="Refactor parser", tags=["techdebt"])
 
         updated = store.update_task(
-            task.id,
-            title="Updated title",
-            status="in_progress",
-            priority="high",
+            created.id,
+            title="Refactor parser module",
+            description="Make parser incremental",
+            status="blocked",
+            priority="critical",
+            tags=["backend", "techdebt"],
+            context={"phase": "blocked", "due_date": "2026-04-01", "repo_path": "/mono"},
         )
 
         assert updated is not None
-        assert updated.title == "Updated title"
-        assert updated.status == "in_progress"
-        assert updated.priority == "high"
+        assert updated.title == "Refactor parser module"
+        assert updated.status == "blocked"
+        assert updated.priority == "critical"
+        assert updated.phase == "blocked"
+        assert updated.due_date == "2026-04-01"
+        assert updated.repo_path == "/mono"
 
-    def test_update_nonexistent_task(self, temp_store_path):
-        """Test updating a nonexistent task."""
-        store = TaskStore(temp_store_path)
+        assert store.delete_task(created.id) is True
+        assert store.get_task(created.id) is None
+        assert store.delete_task(created.id) is False
 
-        result = store.update_task("T-NONEXISTENT", title="New title")
-
-        assert result is None
-
-    def test_update_task_partial(self, temp_store_path):
-        """Test partial update (only some fields)."""
-        store = TaskStore(temp_store_path)
-        task = store.create_task(
-            title="Original",
-            description="Original desc",
-            priority="normal",
+    def test_reserved_role_tags_removed_on_create_and_update(self, mcp_test_db):
+        store = TaskStore()
+        created = store.create_task(
+            title="Sanitize role tags",
+            tags=["backend", "manager", "coder", "analyzer"],
+            context={"phase": "analyze"},
         )
 
-        updated = store.update_task(task.id, priority="high")
+        assert created.tags == ["backend"]
+        assert created.phase == "analyze"
 
-        assert updated.title == "Original"  # Unchanged
-        assert updated.description == "Original desc"  # Unchanged
-        assert updated.priority == "high"  # Updated
+        updated = store.update_task(
+            created.id,
+            tags=["manager", "qa", "analyzer"],
+            context={"phase": "testing"},
+        )
 
-    def test_delete_task(self, temp_store_path):
-        """Test deleting a task."""
-        store = TaskStore(temp_store_path)
-        task = store.create_task(title="Task to delete")
-
-        result = store.delete_task(task.id)
-
-        assert result is True
-        assert store.get_task(task.id) is None
-
-    def test_delete_nonexistent_task(self, temp_store_path):
-        """Test deleting a nonexistent task."""
-        store = TaskStore(temp_store_path)
-
-        result = store.delete_task("T-NONEXISTENT")
-
-        assert result is False
-
-    def test_persistence_save_and_load(self, temp_store_path):
-        """Test that tasks persist across store instances."""
-        # Create store and add tasks
-        store1 = TaskStore(temp_store_path)
-        task1 = store1.create_task(title="Persistent task 1")
-        task2 = store1.create_task(title="Persistent task 2", priority="high")
-
-        # Create new store instance pointing to same file
-        store2 = TaskStore(temp_store_path)
-
-        assert len(store2.tasks) == 2
-        assert store2.get_task(task1.id) is not None
-        assert store2.get_task(task2.id) is not None
-        assert store2.get_task(task2.id).priority == "high"
-
-    def test_load_empty_file(self, temp_store_path):
-        """Test loading from an empty file."""
-        Path(temp_store_path).write_text("")
-
-        store = TaskStore(temp_store_path)
-
-        assert len(store.tasks) == 0
-
-    def test_load_nonexistent_file(self):
-        """Test loading from a nonexistent file."""
-        store = TaskStore("/tmp/nonexistent_task_store_test.json")
-
-        assert len(store.tasks) == 0
-
-    def test_load_invalid_json(self, temp_store_path):
-        """Test loading from invalid JSON file."""
-        Path(temp_store_path).write_text("invalid json {{{")
-
-        store = TaskStore(temp_store_path)
-
-        # Should handle gracefully
-        assert len(store.tasks) == 0
-
-    def test_save_creates_parent_directory(self):
-        """Test that save creates parent directories if needed."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            nested_path = Path(tmpdir) / "nested" / "path" / "tasks.json"
-
-            store = TaskStore(str(nested_path))
-            store.create_task(title="Test task")
-
-            assert nested_path.exists()
-
-    def test_update_task_updates_timestamp(self, temp_store_path):
-        """Test that updating a task updates the 'updated' timestamp."""
-        store = TaskStore(temp_store_path)
-        task = store.create_task(title="Test")
-        original_updated = task.updated
-
-        import time
-        time.sleep(0.01)  # Small delay to ensure timestamp changes
-
-        updated = store.update_task(task.id, title="Updated")
-
-        assert updated.updated > original_updated
+        assert updated is not None
+        assert updated.tags == ["qa"]
+        assert updated.phase == "testing"
 
 
-class TestTaskStoreFilters:
-    """Tests for TaskStore filtering combinations."""
-
-    @pytest.fixture
-    def populated_store(self):
-        """Create a store with various tasks."""
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json") as f:
-            filepath = f.name
-
-        store = TaskStore(filepath)
-
-        # Create diverse tasks
-        store.create_task(title="Backend API", tags=["backend"], priority="high")
-        store.create_task(title="Frontend UI", tags=["frontend"], priority="normal")
-        store.create_task(title="Database migration", tags=["backend", "database"], priority="critical")
-        store.create_task(title="Bug fix", tags=["bug"], priority="high")
-
-        # Update some statuses
-        tasks = store.list_tasks()
-        store.update_task(tasks[0].id, status="in_progress")
-        store.update_task(tasks[2].id, status="done")
-
-        yield store
-
-        Path(filepath).unlink(missing_ok=True)
-
-    def test_combined_status_and_priority(self, populated_store):
-        """Test filtering by both status and priority."""
-        tasks = populated_store.list_tasks(status="todo", priority="high")
-
-        assert len(tasks) == 1
-        assert tasks[0].title == "Bug fix"
-
-    def test_combined_status_and_tags(self, populated_store):
-        """Test filtering by both status and tags."""
-        tasks = populated_store.list_tasks(status="done", tags=["backend"])
-
-        assert len(tasks) == 1
-        assert tasks[0].title == "Database migration"
-
-    def test_no_matching_tasks(self, populated_store):
-        """Test filter that matches no tasks."""
-        tasks = populated_store.list_tasks(status="blocked")
-
-        assert len(tasks) == 0
-
-
-class TestMCPTools:
-    """Tests for MCP tool handlers."""
-
-    @pytest.fixture(autouse=True)
-    def setup_store(self):
-        """Set up a clean store for each test."""
-        # Clear existing tasks
-        store.tasks.clear()
-        yield
-        # Clean up
-        store.tasks.clear()
-
+class TestMcpTools:
     @pytest.mark.asyncio
-    async def test_list_tools(self):
-        """Test listing available tools."""
+    async def test_list_tools_contains_expected_tools(self, mcp_test_db):
         tools = await list_tools()
+        names = {tool.name for tool in tools}
 
-        assert len(tools) > 0
-        tool_names = [t.name for t in tools]
-
-        assert "create_task" in tool_names
-        assert "list_tasks" in tool_names
-        assert "get_task" in tool_names
-        assert "update_task" in tool_names
-        assert "start_task" in tool_names
-        assert "complete_task" in tool_names
-        assert "block_task" in tool_names
-        assert "delete_task" in tool_names
-        assert "split_task" in tool_names
-        assert "reorganize_tasks" in tool_names
-        assert "analyze_task" in tool_names
-        assert "analyze_backlog" in tool_names
+        assert "create_task" in names
+        assert "list_tasks" in names
+        assert "get_task" in names
+        assert "update_task" in names
+        assert "start_task" in names
+        assert "complete_task" in names
+        assert "block_task" in names
+        assert "delete_task" in names
+        assert "split_task" in names
+        assert "reorganize_tasks" in names
 
     @pytest.mark.asyncio
-    async def test_create_task_tool(self):
-        """Test create_task tool handler."""
-        result = await call_tool("create_task", {
-            "title": "Test task",
-            "description": "A test task",
-            "priority": "high",
-            "tags": ["test"],
-        })
+    async def test_create_list_get_update_delete_flow(self, mcp_test_db):
+        created_response = await call_tool(
+            "create_task",
+            {
+                "title": "Wire MCP",
+                "description": "Integrate tooling",
+                "priority": "high",
+                "tags": ["mcp", "backend"],
+                "context": {
+                    "phase": "analyze",
+                    "due_date": "2026-03-31",
+                    "repo_path": "/home/mwu/Work/projects/agent-orchestrator",
+                },
+            },
+        )
+        create_text = created_response[0].text
+        assert "Created task" in create_text
 
-        assert len(result) == 1
-        assert "Created task" in result[0].text
-        assert "Test task" in result[0].text
+        created_id = create_text.split("Created task ", 1)[1].split(":", 1)[0].strip()
+        assert created_id.startswith("MCP-")
 
-    @pytest.mark.asyncio
-    async def test_list_tasks_tool(self):
-        """Test list_tasks tool handler."""
-        # Create some tasks first
-        store.create_task(title="Task 1")
-        store.create_task(title="Task 2")
+        listed = await call_tool("list_tasks", {"phase": "analyze"})
+        assert f"[{created_id}] Wire MCP" in listed[0].text
 
-        result = await call_tool("list_tasks", {})
+        task_details = await call_tool("get_task", {"task_id": created_id})
+        assert f"Task {created_id}" in task_details[0].text
+        assert '"phase": "analyze"' in task_details[0].text
 
-        assert len(result) == 1
-        assert "Found 2 task(s)" in result[0].text
-        assert "Task 1" in result[0].text
-        assert "Task 2" in result[0].text
+        updated = await call_tool(
+            "update_task",
+            {
+                "task_id": created_id,
+                "status": "in_progress",
+                "priority": "critical",
+                "context": {"phase": "active"},
+            },
+        )
+        assert f"Updated task {created_id}" in updated[0].text
 
-    @pytest.mark.asyncio
-    async def test_list_tasks_empty(self):
-        """Test list_tasks with no tasks."""
-        result = await call_tool("list_tasks", {})
+        deleted = await call_tool("delete_task", {"task_id": created_id})
+        assert f"Deleted task {created_id}" in deleted[0].text
 
-        assert len(result) == 1
-        assert "No tasks found" in result[0].text
-
-    @pytest.mark.asyncio
-    async def test_get_task_tool(self):
-        """Test get_task tool handler."""
-        task = store.create_task(title="Test task", description="Details")
-
-        result = await call_tool("get_task", {"task_id": task.id})
-
-        assert len(result) == 1
-        assert task.id in result[0].text
-        assert "Test task" in result[0].text
-
-    @pytest.mark.asyncio
-    async def test_get_task_not_found(self):
-        """Test get_task with nonexistent task."""
-        result = await call_tool("get_task", {"task_id": "T-NONEXISTENT"})
-
-        assert len(result) == 1
-        assert "not found" in result[0].text
+        missing = await call_tool("get_task", {"task_id": created_id})
+        assert "not found" in missing[0].text
 
     @pytest.mark.asyncio
-    async def test_update_task_tool(self):
-        """Test update_task tool handler."""
-        task = store.create_task(title="Original")
+    async def test_status_helper_tools_and_filters(self, mcp_test_db):
+        created_response = await call_tool("create_task", {"title": "Helper flow"})
+        created_id = created_response[0].text.split("Created task ", 1)[1].split(":", 1)[0].strip()
 
-        result = await call_tool("update_task", {
-            "task_id": task.id,
-            "title": "Updated",
-            "priority": "critical",
-        })
+        started = await call_tool("start_task", {"task_id": created_id})
+        assert "Started task" in started[0].text
 
-        assert len(result) == 1
-        assert "Updated task" in result[0].text
-        assert "Updated" in result[0].text
+        in_progress = await call_tool("list_tasks", {"status": "in_progress"})
+        assert created_id in in_progress[0].text
 
-    @pytest.mark.asyncio
-    async def test_update_task_not_found(self):
-        """Test update_task with nonexistent task."""
-        result = await call_tool("update_task", {
-            "task_id": "T-NONEXISTENT",
-            "title": "New title",
-        })
+        completed = await call_tool("complete_task", {"task_id": created_id})
+        assert "Completed task" in completed[0].text
 
-        assert len(result) == 1
-        assert "not found" in result[0].text
+        done = await call_tool("list_tasks", {"status": "done"})
+        assert created_id in done[0].text
+
+        blocked_missing = await call_tool("block_task", {"task_id": "MCP-9999", "reason": "waiting"})
+        assert "not found" in blocked_missing[0].text
 
     @pytest.mark.asyncio
-    async def test_start_task_tool(self):
-        """Test start_task tool handler."""
-        task = store.create_task(title="Task to start")
+    async def test_split_reorganize_unknown_and_empty_paths(self, mcp_test_db):
+        parent_response = await call_tool("create_task", {"title": "Parent", "tags": ["planning"]})
+        parent_id = parent_response[0].text.split("Created task ", 1)[1].split(":", 1)[0].strip()
 
-        result = await call_tool("start_task", {"task_id": task.id})
+        split = await call_tool(
+            "split_task",
+            {
+                "task_id": parent_id,
+                "subtasks": [
+                    {"title": "Child one", "priority": "high"},
+                    {"title": "Child two"},
+                ],
+            },
+        )
+        assert "into 2 subtasks" in split[0].text
 
-        assert len(result) == 1
-        assert "Started task" in result[0].text
+        todo_list = await call_tool("list_tasks", {"status": "todo"})
+        assert "Child one" in todo_list[0].text
+        assert "Child two" in todo_list[0].text
 
-        # Verify status changed
-        updated = store.get_task(task.id)
-        assert updated.status == "in_progress"
+        reorganize = await call_tool(
+            "reorganize_tasks",
+            {
+                "updates": [
+                    {"task_id": parent_id, "priority": "critical", "tags": ["planning", "top"]},
+                    {"task_id": "MCP-4040", "priority": "low"},
+                ]
+            },
+        )
+        assert "Updated" in reorganize[0].text
+        assert "not found" in reorganize[0].text
 
-    @pytest.mark.asyncio
-    async def test_start_task_not_found(self):
-        """Test start_task with nonexistent task."""
-        result = await call_tool("start_task", {"task_id": "T-NONEXISTENT"})
+        unknown = await call_tool("does_not_exist", {})
+        assert "Unknown tool" in unknown[0].text
 
-        assert len(result) == 1
-        assert "not found" in result[0].text
-
-    @pytest.mark.asyncio
-    async def test_complete_task_tool(self):
-        """Test complete_task tool handler."""
-        task = store.create_task(title="Task to complete")
-
-        result = await call_tool("complete_task", {"task_id": task.id})
-
-        assert len(result) == 1
-        assert "Completed task" in result[0].text
-
-        # Verify status changed
-        updated = store.get_task(task.id)
-        assert updated.status == "done"
-
-    @pytest.mark.asyncio
-    async def test_complete_task_not_found(self):
-        """Test complete_task with nonexistent task."""
-        result = await call_tool("complete_task", {"task_id": "T-NONEXISTENT"})
-
-        assert len(result) == 1
-        assert "not found" in result[0].text
+        empty = await call_tool("list_tasks", {"tags": ["tag-that-does-not-exist"]})
+        assert "No tasks found." in empty[0].text
 
     @pytest.mark.asyncio
-    async def test_block_task_tool(self):
-        """Test block_task tool handler."""
-        task = store.create_task(title="Task to block")
+    async def test_analysis_tools_safe_paths(self, mcp_test_db):
+        analyze_missing = await call_tool("analyze_task", {"task_id": "MCP-0000"})
+        assert "not found" in analyze_missing[0].text
 
-        result = await call_tool("block_task", {
-            "task_id": task.id,
-            "reason": "Waiting for API key",
-        })
-
-        assert len(result) == 1
-        assert "Blocked task" in result[0].text
-        assert "Waiting for API key" in result[0].text
-
-        # Verify status changed
-        updated = store.get_task(task.id)
-        assert updated.status == "blocked"
-
-    @pytest.mark.asyncio
-    async def test_block_task_not_found(self):
-        """Test block_task with nonexistent task."""
-        result = await call_tool("block_task", {"task_id": "T-NONEXISTENT"})
-
-        assert len(result) == 1
-        assert "not found" in result[0].text
-
-    @pytest.mark.asyncio
-    async def test_delete_task_tool(self):
-        """Test delete_task tool handler."""
-        task = store.create_task(title="Task to delete")
-
-        result = await call_tool("delete_task", {"task_id": task.id})
-
-        assert len(result) == 1
-        assert "Deleted task" in result[0].text
-
-        # Verify task is gone
-        assert store.get_task(task.id) is None
-
-    @pytest.mark.asyncio
-    async def test_delete_task_not_found(self):
-        """Test delete_task with nonexistent task."""
-        result = await call_tool("delete_task", {"task_id": "T-NONEXISTENT"})
-
-        assert len(result) == 1
-        assert "not found" in result[0].text
-
-    @pytest.mark.asyncio
-    async def test_split_task_tool(self):
-        """Test split_task tool handler."""
-        task = store.create_task(title="Complex task", tags=["backend"])
-
-        result = await call_tool("split_task", {
-            "task_id": task.id,
-            "subtasks": [
-                {"title": "Subtask 1", "description": "First part"},
-                {"title": "Subtask 2", "description": "Second part"},
-            ],
-        })
-
-        assert len(result) == 1
-        assert "Split task" in result[0].text
-        assert "2 subtasks" in result[0].text
-        assert "Subtask 1" in result[0].text
-        assert "Subtask 2" in result[0].text
-
-    @pytest.mark.asyncio
-    async def test_split_task_not_found(self):
-        """Test split_task with nonexistent task."""
-        result = await call_tool("split_task", {
-            "task_id": "T-NONEXISTENT",
-            "subtasks": [{"title": "Subtask"}],
-        })
-
-        assert len(result) == 1
-        assert "not found" in result[0].text
-
-    @pytest.mark.asyncio
-    async def test_reorganize_tasks_tool(self):
-        """Test reorganize_tasks tool handler."""
-        task1 = store.create_task(title="Task 1")
-        task2 = store.create_task(title="Task 2")
-
-        result = await call_tool("reorganize_tasks", {
-            "updates": [
-                {"task_id": task1.id, "priority": "high", "order": 1},
-                {"task_id": task2.id, "priority": "low", "order": 2},
-            ],
-        })
-
-        assert len(result) == 1
-        assert "Reorganized 2 task(s)" in result[0].text
-
-        # Verify updates
-        assert store.get_task(task1.id).priority == "high"
-        assert store.get_task(task2.id).priority == "low"
-
-    @pytest.mark.asyncio
-    async def test_reorganize_tasks_partial_not_found(self):
-        """Test reorganize_tasks with some nonexistent tasks."""
-        task = store.create_task(title="Task 1")
-
-        result = await call_tool("reorganize_tasks", {
-            "updates": [
-                {"task_id": task.id, "priority": "high"},
-                {"task_id": "T-NONEXISTENT", "priority": "low"},
-            ],
-        })
-
-        assert len(result) == 1
-        assert "not found" in result[0].text
-
-    @pytest.mark.asyncio
-    async def test_unknown_tool(self):
-        """Test calling an unknown tool."""
-        result = await call_tool("unknown_tool", {})
-
-        assert len(result) == 1
-        assert "Unknown tool" in result[0].text
-
-    @pytest.mark.asyncio
-    async def test_tool_error_handling(self):
-        """Test that tool errors are handled gracefully."""
-        # This should trigger an error due to missing required field
-        result = await call_tool("create_task", {})  # Missing 'title'
-
-        assert len(result) == 1
-        assert "Error" in result[0].text
+        backlog_empty = await call_tool("analyze_backlog", {})
+        assert "No tasks to analyze." in backlog_empty[0].text

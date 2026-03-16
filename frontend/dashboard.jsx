@@ -27,17 +27,17 @@ const T = {
 // Stack definitions (derived from stage)
 const STACKS = {
   manager: {
-    id:"manager", label:"MANAGER", icon:"◎", color:T.amber,
+    id:"manager", label:"PLANNING", icon:"◎", color:T.amber,
     role:"Research · Plan · Delegate",
     model:"codex", desc:"Ingests backlog/inbox and coordinates sessions",
   },
   analyzer: {
-    id:"analyzer", label:"ANALYZER", icon:"◈", color:T.teal,
+    id:"analyzer", label:"VERIFICATION", icon:"◈", color:T.teal,
     role:"System · Traces · Architecture",
     model:"codex", desc:"Pre-flight analysis and testing feedback",
   },
   coder: {
-    id:"coder", label:"CODER", icon:"◇", color:T.green,
+    id:"coder", label:"IMPLEMENTATION", icon:"◇", color:T.green,
     role:"Implement · Fix · Refactor",
     model:"codex", desc:"Executes active sessions and applies changes",
   },
@@ -79,14 +79,23 @@ const STATUS_TO_STAGE = {
   done: "done",
 };
 
-const STAGE_TO_STATUS = {
-  inbox: "radar",
-  analysis: "radar",
-  backlog: "runway",
-  active: "flight",
-  testing: "flight",
-  blocked: "blocked",
-  done: "done",
+const STAGE_TO_UPDATE = {
+  inbox: { status: "radar", phase: "backlog" },
+  analysis: { status: "runway", phase: "analyze" },
+  backlog: { status: "runway", phase: "backlog" },
+  active: { status: "flight", phase: "active" },
+  testing: { status: "flight", phase: "testing" },
+  blocked: { status: "blocked", phase: "blocked" },
+  done: { status: "done", phase: "done" },
+};
+
+const taskToStage = (task) => {
+  const phase = task.phase || "";
+  if (task.status === "done") return "done";
+  if (task.status === "blocked") return "blocked";
+  if (task.status === "flight") return phase === "testing" ? "testing" : "active";
+  if (task.status === "runway") return phase === "analyze" ? "analysis" : "backlog";
+  return STATUS_TO_STAGE[task.status] || "inbox";
 };
 
 // ─── Micro-components ─────────────────────────────────────────────────────────
@@ -216,9 +225,8 @@ function TaskCard({ task, onMove, onDragStart, onDragEnd }) {
         }}>{task.title}</span>
       </div>
       <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"}}>
-        <Pill color={stack.color} sm>{stack.icon} {stack.id}</Pill>
         <Pill color={T.textDim} sm>{task.task_code || task.id}</Pill>
-        <span style={{fontSize:8,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",marginLeft:"auto"}}>{fmtAge(new Date(task.updated))}</span>
+        <span style={{fontSize:8,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",marginLeft:"auto"}}>{fmtAge(new Date(task.updated))}</span>
       </div>
     </div>
   );
@@ -243,13 +251,13 @@ function KanbanColumn({ stage, tasks, onMove, onDropTask, onDragStage, isDropTar
       }}>
         <span style={{color:stage.color,fontSize:13}}>{stage.icon}</span>
         <span style={{
-          fontFamily:"'IBM Plex Mono',monospace",fontSize:10,fontWeight:700,
+          fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",fontSize:10,fontWeight:700,
           color:stage.color,letterSpacing:"0.1em",
         }}>{stage.label}</span>
         <span style={{
           marginLeft:"auto",background:`${stage.color}25`,color:stage.color,
           borderRadius:10,padding:"1px 7px",fontSize:9,fontWeight:700,
-          fontFamily:"'IBM Plex Mono',monospace",
+          fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
         }}>{count}</span>
       </div>
       <div
@@ -275,7 +283,7 @@ function KanbanColumn({ stage, tasks, onMove, onDropTask, onDragStage, isDropTar
           onDragStage?.(null);
         }} />)}
         {count===0 && (
-          <div style={{textAlign:"center",padding:"20px 0",fontSize:9,color:T.textFaint,fontFamily:"'IBM Plex Mono',monospace"}}>
+          <div style={{textAlign:"center",padding:"20px 0",fontSize:9,color:T.textFaint,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace"}}>
             — empty —
           </div>
         )}
@@ -297,18 +305,18 @@ function StackLane({ stack, tasks, onMove }) {
       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
         <span style={{fontSize:16,color:s.color}}>{s.icon}</span>
         <div>
-          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,fontWeight:700,color:s.color}}>{s.label}</div>
+          <div style={{fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",fontSize:12,fontWeight:700,color:s.color}}>{s.label}</div>
           <div style={{fontSize:9,color:T.textDim}}>{s.role}</div>
         </div>
         <div style={{marginLeft:"auto",textAlign:"right"}}>
           <div style={{fontSize:9,color:T.textDim}}>model</div>
-          <div style={{fontSize:9,color:T.text,fontFamily:"'IBM Plex Mono',monospace"}}>{s.model}</div>
+          <div style={{fontSize:9,color:T.text,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace"}}>{s.model}</div>
         </div>
       </div>
 
       {/* Runway visualization — like planes in line */}
       <div style={{marginBottom:8}}>
-        <div style={{fontSize:8,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",marginBottom:4,letterSpacing:"0.08em"}}>
+        <div style={{fontSize:8,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",marginBottom:4,letterSpacing:"0.08em"}}>
           ══ RUNWAY ({queued.length} queued)
         </div>
         <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
@@ -318,7 +326,7 @@ function StackLane({ stack, tasks, onMove }) {
               width:28,height:18,borderRadius:3,
               background:`${s.color}20`,border:`1px solid ${s.color}50`,
               display:"flex",alignItems:"center",justifyContent:"center",
-              fontSize:7,color:s.color,fontFamily:"'IBM Plex Mono',monospace",
+              fontSize:7,color:s.color,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
               position:"relative",
             }}>
               {i+1}
@@ -333,7 +341,7 @@ function StackLane({ stack, tasks, onMove }) {
         <div key={t.id} style={{
           background:`${s.color}12`,border:`1px solid ${s.color}40`,
           borderRadius:5,padding:"5px 8px",fontSize:9,
-          fontFamily:"'IBM Plex Mono',monospace",color:T.text,
+          fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",color:T.text,
           borderLeft:`3px solid ${s.color}`,
           animation:"breathe 2s ease-in-out infinite",
           marginBottom:4,
@@ -343,7 +351,7 @@ function StackLane({ stack, tasks, onMove }) {
       ))}
 
       <Bar v={tasks.filter(t=>t.stage==="done").length} max={Math.max(6,tasks.length)} color={s.color}/>
-      <div style={{fontSize:8,color:T.textDim,marginTop:3,fontFamily:"'IBM Plex Mono',monospace"}}>
+      <div style={{fontSize:8,color:T.textDim,marginTop:3,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace"}}>
         {tasks.filter(t=>t.stage==="done").length} done / {tasks.length} total
       </div>
     </div>
@@ -355,6 +363,8 @@ export default function RadarRunwayDashboard() {
   const [tasks, setTasks]         = useState([]);
   const [logs,  setLogs]          = useState([]);
   const [syncStatus, setSyncStatus] = useState(null);
+  const [kanbanFiles, setKanbanFiles] = useState([]);
+  const [switchingVault, setSwitchingVault] = useState(false);
   const [draggingTaskId, setDraggingTaskId] = useState(null);
   const [dragTargetStage, setDragTargetStage] = useState(null);
   const [copied,setCopied]        = useState(false);
@@ -383,7 +393,8 @@ export default function RadarRunwayDashboard() {
       .then((items)=>{
         const mapped = (items || []).map((t)=>({
           ...t,
-          stage: STATUS_TO_STAGE[t.status] || "inbox",
+          stage: taskToStage(t),
+          updated: t.updated_at || t.updated,
         }));
         setTasks(mapped);
       })
@@ -404,10 +415,21 @@ export default function RadarRunwayDashboard() {
       });
   },[]);
 
+  const fetchKanbanFiles = useCallback(()=>{
+    return fetch(`${API_BASE}/kanban/files`)
+      .then(r => r.json())
+      .then((data)=>{
+        setKanbanFiles(data.files || []);
+      })
+      .catch(()=>addLog("Failed to load kanban file list"));
+  },[addLog]);
+
   const moveTask = useCallback((id,newStage)=>{
-    const newStatus = STAGE_TO_STATUS[newStage] || "radar";
-    fetch(`${API_BASE}/tasks/${id}/move?status=${newStatus}`,{
-      method:"POST",
+    const payload = STAGE_TO_UPDATE[newStage] || STAGE_TO_UPDATE.inbox;
+    fetch(`${API_BASE}/tasks/${id}`,{
+      method:"PATCH",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(payload),
     })
       .then(()=>fetchTasks())
       .catch(()=>addLog(`Failed to move ${id} → ${newStage}`));
@@ -416,14 +438,16 @@ export default function RadarRunwayDashboard() {
   useEffect(()=>{
     fetchTasks();
     fetchSyncStatus();
+    fetchKanbanFiles();
 
     const intervalId = setInterval(()=>{
       fetchTasks();
       fetchSyncStatus();
+      fetchKanbanFiles();
     }, 5000);
 
     return ()=>clearInterval(intervalId);
-  },[fetchTasks, fetchSyncStatus]);
+  },[fetchTasks, fetchSyncStatus, fetchKanbanFiles]);
 
   useEffect(()=>{ logRef.current?.scrollTo({top:logRef.current.scrollHeight,behavior:"smooth"}); },[logs]);
 
@@ -436,15 +460,15 @@ export default function RadarRunwayDashboard() {
   };
 
   const srcColor = {manager:T.amber, analyzer:T.teal, coder:T.green, system:T.textDim};
-  const srcLabel = {manager:"MNGR", analyzer:"ANLZ", coder:"CODE", system:"SYS "};
+  const srcLabel = {manager:"PLAN", analyzer:"VERI", coder:"IMPL", system:"SYS "};
 
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&family=Epilogue:wght@400;600;800;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
         :root{color-scheme:dark}
-        body{background:${T.bg};color:${T.text};font-family:'Epilogue',sans-serif;overflow-x:hidden}
+        body{background:${T.bg};color:${T.text};font-family:'Inter', 'Segoe UI', Roboto, sans-serif;overflow-x:hidden;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
         ::-webkit-scrollbar{width:3px;height:3px}
         ::-webkit-scrollbar-track{background:${T.bg}}
         ::-webkit-scrollbar-thumb{background:${T.borderHi};border-radius:2px}
@@ -469,54 +493,64 @@ export default function RadarRunwayDashboard() {
               <span style={{fontSize:14,color:T.amber}}>⊙</span>
             </div>
             <div>
-              <div style={{fontFamily:"'Epilogue',sans-serif",fontWeight:900,fontSize:17,letterSpacing:"-0.03em",color:T.white}}>
+              <div style={{fontFamily:"'Inter', 'Segoe UI', Roboto, sans-serif",fontWeight:900,fontSize:17,letterSpacing:"-0.03em",color:T.white}}>
                 RADAR<span style={{color:T.amber}}>·</span>RUNWAY
               </div>
-              <div style={{fontSize:8,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.15em"}}>
-                3-STACK ORCHESTRATOR · OBSIDIAN SYNC
+              <div style={{fontSize:8,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.15em"}}>
+                PHASE-DRIVEN KANBAN · OBSIDIAN SYNC
               </div>
             </div>
           </div>
 
-          {/* Stack status pills */}
-          <div style={{display:"flex",gap:6}}>
-            {Object.values(STACKS).map(s=>{
-              const active=tasks.filter(t=>stageToStack(t.stage)===s.id&&t.stage==="active").length;
-              return (
-                <div key={s.id} style={{
-                  display:"flex",alignItems:"center",gap:5,padding:"4px 10px",
-                  background:`${s.color}12`,border:`1px solid ${s.color}35`,borderRadius:6,
-                }}>
-                  <span style={{color:s.color,fontSize:12}}>{s.icon}</span>
-                  <span style={{fontSize:9,color:s.color,fontFamily:"'IBM Plex Mono',monospace",fontWeight:700}}>{s.label}</span>
-                  {active>0 && <span style={{
-                    width:6,height:6,borderRadius:"50%",background:s.color,
-                    animation:"breathe 1.2s ease-in-out infinite",
-                  }}/>}
-                </div>
-              );
-            })}
-          </div>
-
           <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
+            <select
+              value={syncStatus?.vault_path || ""}
+              onChange={(e)=>{
+                const path = e.target.value;
+                if (!path) return;
+                setSwitchingVault(true);
+                fetch(`${API_BASE}/kanban/select`, {
+                  method:"POST",
+                  headers:{"Content-Type":"application/json"},
+                  body: JSON.stringify({ path }),
+                })
+                  .then(()=>Promise.all([fetchTasks(), fetchSyncStatus(), fetchKanbanFiles(), fetchMd()]))
+                  .catch(()=>addLog(`Failed to switch kanban context to ${path}`))
+                  .finally(()=>setSwitchingVault(false));
+              }}
+              style={{
+                padding:"5px 8px",
+                borderRadius:6,
+                background:T.surface,
+                border:`1px solid ${T.borderHi}`,
+                color:T.text,
+                fontSize:9,
+                fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
+                maxWidth:260,
+              }}
+            >
+              {kanbanFiles.map((path)=>(
+                <option key={path} value={path}>{path.split('/').pop()}</option>
+              ))}
+            </select>
             {/* Obsidian sync button */}
             <button style={{
               padding:"5px 12px",borderRadius:6,cursor:"pointer",
-              background: obSync ? `${T.purple}25` : T.surface,
-              border:`1px solid ${obSync ? T.purple : T.borderHi}`,
-              color: obSync ? T.purple : T.textDim,
-              fontSize:9,fontFamily:"'IBM Plex Mono',monospace",
+              background: (obSync || switchingVault) ? `${T.purple}25` : T.surface,
+              border:`1px solid ${(obSync || switchingVault) ? T.purple : T.borderHi}`,
+              color: (obSync || switchingVault) ? T.purple : T.textDim,
+              fontSize:9,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
               display:"flex",alignItems:"center",gap:6,transition:"all .3s",
             }} onClick={()=>{ setShowMd(s=>!s); fetchMd(); }}>
               <span style={{fontSize:11}}>◈</span>
-              {obSync ? "SYNCING…" : "OBSIDIAN MD"}
+              {(obSync || switchingVault) ? "SYNCING…" : "OBSIDIAN MD"}
             </button>
             <button onClick={copyMd} style={{
               padding:"5px 12px",borderRadius:6,cursor:"pointer",
               background: copied ? `${T.green}20` : T.surface,
               border:`1px solid ${copied ? T.green : T.borderHi}`,
               color: copied ? T.green : T.textDim,
-              fontSize:9,fontFamily:"'IBM Plex Mono',monospace",
+              fontSize:9,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
             }}>
               {copied ? "✓ COPIED" : "⎘ COPY MD"}
             </button>
@@ -530,7 +564,7 @@ export default function RadarRunwayDashboard() {
               background: `${T.blue}15`,
               border:`1px solid ${T.blue}`,
               color:T.blue,
-              fontSize:9,fontFamily:"'IBM Plex Mono',monospace",
+              fontSize:9,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
             }}>⟲ SYNC</button>
             {/* View toggle */}
             <div style={{display:"flex",borderRadius:6,overflow:"hidden",border:`1px solid ${T.borderHi}`}}>
@@ -539,7 +573,7 @@ export default function RadarRunwayDashboard() {
                   padding:"5px 12px",border:"none",cursor:"pointer",
                   background:view===v?`${T.amber}20`:T.surface,
                   color:view===v?T.amber:T.textDim,
-                  fontSize:9,fontFamily:"'IBM Plex Mono',monospace",fontWeight:700,
+                  fontSize:9,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",fontWeight:700,
                   letterSpacing:"0.08em",
                 }}>{v.toUpperCase()}</button>
               ))}
@@ -560,7 +594,7 @@ export default function RadarRunwayDashboard() {
                 borderRadius:8,
                 padding:"10px 12px",
                 fontSize:11,
-                fontFamily:"'IBM Plex Mono',monospace",
+                fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
               }}>
                 ⚠ Kanban file not found: {syncStatus.vault_path}
               </div>
@@ -574,7 +608,7 @@ export default function RadarRunwayDashboard() {
                 borderRadius:8,
                 padding:"10px 12px",
                 fontSize:11,
-                fontFamily:"'IBM Plex Mono',monospace",
+                fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
               }}>
                 ⚠ Failed to parse TODO.md: {syncStatus.parse_error}
               </div>
@@ -588,7 +622,7 @@ export default function RadarRunwayDashboard() {
                 borderRadius:8,
                 padding:"10px 12px",
                 fontSize:11,
-                fontFamily:"'IBM Plex Mono',monospace",
+                fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
               }}>
                 ⚠ No tasks found in TODO.md ({syncStatus.vault_path}). Add task lines like: - [ ] My task
               </div>
@@ -600,7 +634,7 @@ export default function RadarRunwayDashboard() {
                 padding:12,overflow:"hidden",
                 display:"flex",flexDirection:"column",
               }}>
-                <div style={{fontSize:9,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.1em",marginBottom:10,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{fontSize:9,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em",marginBottom:10,display:"flex",alignItems:"center",gap:8}}>
                   <span style={{color:T.amber}}>◈</span> KANBAN BOARD
                   <span style={{color:T.textFaint}}>— hover card to move stage —</span>
                   <span style={{marginLeft:"auto",color:T.purple,fontSize:8}}>syncs to Obsidian Work/TODO.md</span>
@@ -643,7 +677,7 @@ export default function RadarRunwayDashboard() {
               <div style={{
                 background:T.bgAlt,borderRadius:10,border:`1px solid ${T.border}`,padding:12,
               }}>
-                <div style={{fontSize:9,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.1em",marginBottom:10}}>
+                <div style={{fontSize:9,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em",marginBottom:10}}>
                   <span style={{color:T.amber}}>◈</span> STACK RUNWAYS
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
@@ -655,17 +689,17 @@ export default function RadarRunwayDashboard() {
                 <div style={{
                   marginTop:10,padding:"10px 14px",
                   background:T.surface,borderRadius:8,border:`1px solid ${T.border}`,
-                  fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:T.textDim,
+                  fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",fontSize:10,color:T.textDim,
                   display:"flex",alignItems:"center",justifyContent:"center",gap:8,flexWrap:"wrap",
                 }}>
-                  <span style={{color:T.amber}}>◎ MANAGER</span>
-                  <span>researches & decomposes</span>
+                  <span style={{color:T.amber}}>ANALYSIS</span>
+                  <span>triage & decomposition</span>
                   <span style={{color:T.amber}}>→</span>
-                  <span style={{color:T.teal}}>◈ ANALYZER</span>
-                  <span>traces & root-causes</span>
-                  <span style={{color:T.teal}}>→</span>
-                  <span style={{color:T.green}}>◇ CODER</span>
-                  <span>implements & ships</span>
+                  <span style={{color:T.green}}>ACTIVE</span>
+                  <span>implementation</span>
+                  <span style={{color:T.green}}>→</span>
+                  <span style={{color:T.teal}}>TESTING</span>
+                  <span>verification</span>
                   <span style={{color:T.amber}}>→ feedback loop ↺</span>
                 </div>
               </div>
@@ -677,17 +711,17 @@ export default function RadarRunwayDashboard() {
                 background:T.surface,border:`1px solid ${T.purple}40`,
                 borderRadius:10,padding:12,animation:"slideIn .2s ease",
               }}>
-                <div style={{fontSize:9,color:T.purple,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.1em",marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{fontSize:9,color:T.purple,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em",marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
                   <span>◈ OBSIDIAN kanban.md PREVIEW</span>
                   <span style={{color:T.textDim}}>— paste into your vault</span>
                   <button onClick={copyMd} style={{
                     marginLeft:"auto",padding:"2px 8px",borderRadius:4,cursor:"pointer",
                     background:`${T.purple}20`,border:`1px solid ${T.purple}40`,color:T.purple,
-                    fontSize:8,fontFamily:"'IBM Plex Mono',monospace",
+                    fontSize:8,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
                   }}>{copied?"✓ COPIED":"⎘ COPY"}</button>
                 </div>
                 <pre style={{
-                  fontSize:9.5,color:T.text,fontFamily:"'IBM Plex Mono',monospace",
+                  fontSize:9.5,color:T.text,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
                   overflowX:"auto",whiteSpace:"pre",lineHeight:1.6,
                   maxHeight:220,overflowY:"auto",
                 }}>{mdContent}</pre>
@@ -703,9 +737,9 @@ export default function RadarRunwayDashboard() {
                 background:T.surface,border:`1px solid ${T.border}`,
                 borderRadius:10,padding:12,display:"flex",flexDirection:"column",alignItems:"center",gap:8,
               }}>
-                <div style={{fontSize:9,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.1em"}}>⊙ RADAR SWEEP</div>
+                <div style={{fontSize:9,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em"}}>⊙ RADAR SWEEP</div>
                 <RadarSweep tasks={tasks}/>
-                <div style={{fontSize:8,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",textAlign:"center"}}>
+                <div style={{fontSize:8,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",textAlign:"center"}}>
                   {tasks.filter(t=>t.stage==="inbox").length} signals detected
                 </div>
               </div>
@@ -715,8 +749,8 @@ export default function RadarRunwayDashboard() {
                 background:T.surface,border:`1px solid ${T.border}`,
                 borderRadius:10,padding:"10px 12px",
               }}>
-                <div style={{fontSize:9,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.1em",marginBottom:8}}>
-                  <span style={{color:T.amber}}>◎</span> MANAGER — ANALYSIS QUEUE
+                <div style={{fontSize:9,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em",marginBottom:8}}>
+                  <span style={{color:T.amber}}>◎</span> ANALYSIS QUEUE
                   <span style={{marginLeft:6,color:T.textFaint,fontSize:8}}>(decomposing into subtasks)</span>
                 </div>
                 {tasks.filter(t=>t.stage==="analysis").map(t=>(
@@ -726,7 +760,7 @@ export default function RadarRunwayDashboard() {
                     background:`${T.amber}08`,borderRadius:"0 4px 4px 0",
                   }}>
                     <span style={{
-                      fontSize:9,fontFamily:"'IBM Plex Mono',monospace",color:T.amber,
+                      fontSize:9,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",color:T.amber,
                       animation:"blink 1.4s ease-in-out infinite",
                     }}>◎</span>
                     <span style={{fontSize:10,color:T.text,flex:1}}>{t.title}</span>
@@ -734,12 +768,12 @@ export default function RadarRunwayDashboard() {
                     <button onClick={()=>moveTask(t.id,"backlog")} style={{
                       fontSize:8,padding:"2px 7px",borderRadius:3,cursor:"pointer",
                       background:`${T.green}15`,border:`1px solid ${T.green}40`,color:T.green,
-                      fontFamily:"'IBM Plex Mono',monospace",
+                      fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
                     }}>→ backlog</button>
                   </div>
                 ))}
                 {tasks.filter(t=>t.stage==="analysis").length===0 && (
-                  <div style={{fontSize:9,color:T.textFaint,fontFamily:"'IBM Plex Mono',monospace",padding:"8px 0"}}>— analysis queue empty —</div>
+                  <div style={{fontSize:9,color:T.textFaint,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",padding:"8px 0"}}>— analysis queue empty —</div>
                 )}
               </div>
             </div>
@@ -758,8 +792,8 @@ export default function RadarRunwayDashboard() {
                 display:"flex",alignItems:"center",gap:6,flexShrink:0,
               }}>
                 <span style={{width:6,height:6,borderRadius:"50%",background:T.green,animation:"breathe 1s infinite",display:"block"}}/>
-                <span style={{fontSize:9,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.1em"}}>LIVE LOG</span>
-                <span style={{marginLeft:"auto",fontSize:8,color:T.textFaint,fontFamily:"'IBM Plex Mono',monospace"}}>{logs.length} entries</span>
+                <span style={{fontSize:9,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em"}}>LIVE LOG</span>
+                <span style={{marginLeft:"auto",fontSize:8,color:T.textFaint,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace"}}>{logs.length} entries</span>
               </div>
               <div ref={logRef} style={{flex:1,overflowY:"auto",padding:"8px 10px",minHeight:300,maxHeight:420}}>
                 {logs.map(l=>(
@@ -768,10 +802,10 @@ export default function RadarRunwayDashboard() {
                     animation:"slideIn .2s ease",
                     borderBottom:`1px solid ${T.textFaint}`,
                   }}>
-                    <span style={{fontSize:8,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",flexShrink:0,lineHeight:1.8}}>{fmtTime(l.ts)}</span>
+                    <span style={{fontSize:8,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",flexShrink:0,lineHeight:1.8}}>{fmtTime(l.ts)}</span>
                     <span style={{
                       fontSize:8,color:srcColor[l.src]||T.textDim,
-                      fontFamily:"'IBM Plex Mono',monospace",fontWeight:700,
+                      fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",fontWeight:700,
                       flexShrink:0,width:30,lineHeight:1.8,
                     }}>{srcLabel[l.src]||"SYS "}</span>
                     <span style={{fontSize:9.5,color:T.text,lineHeight:1.6}}>{l.msg}</span>
@@ -780,27 +814,6 @@ export default function RadarRunwayDashboard() {
               </div>
             </div>
 
-            {/* Obsidian integration tip */}
-            <div style={{
-              background:`${T.purple}10`,border:`1px solid ${T.purple}30`,
-              borderRadius:10,padding:"10px 12px",
-            }}>
-              <div style={{fontSize:9,color:T.purple,fontFamily:"'IBM Plex Mono',monospace",fontWeight:700,marginBottom:6}}>◈ OBSIDIAN INTEGRATION</div>
-              {[
-                "Copy MD → paste into vault/kanban.md",
-                "Enable Kanban plugin in Obsidian",
-                "Use Dataview for cross-stack queries",
-                "Tag format: #stack/stage for filters",
-                "Watch file with orchestrator for auto-sync",
-              ].map((tip,i)=>(
-                <div key={i} style={{
-                  fontSize:8.5,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",
-                  padding:"2px 0",display:"flex",gap:6,
-                }}>
-                  <span style={{color:T.purple}}>·</span>{tip}
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       </div>

@@ -258,6 +258,27 @@ def test_mixed_id_formats():
         Path(filepath).unlink()
 
 
+def test_reserved_role_tags_are_filtered_from_markdown():
+    """Role labels are UI concerns and should never persist as task tags."""
+    markdown = """## Runway
+
+- [ ] Implement endpoint #backend #manager #coder #analyzer <!-- TASK-010 -->
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".md") as f:
+        f.write(markdown)
+        filepath = f.name
+
+    try:
+        tasks = parse_markdown_file(filepath)
+
+        assert len(tasks) == 1
+        assert tasks[0]["tags"] == ["backend"]
+
+    finally:
+        Path(filepath).unlink()
+
+
 def test_alternative_section_headers():
     """Test parsing with alternative section header names."""
     markdown = """## In Progress

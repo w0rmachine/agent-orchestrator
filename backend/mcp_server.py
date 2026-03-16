@@ -40,6 +40,7 @@ from backend.ai_manager import (
 from backend.database import engine
 from backend.models.task import Task as DBTask
 from backend.models.task import TaskStatus as DBTaskStatus
+from backend.tagging import sanitize_tags
 
 # ── Types ─────────────────────────────────────────────────────────────────────
 TaskStatus = Literal["todo", "in_progress", "done", "blocked"]
@@ -57,6 +58,10 @@ class Task(BaseModel):
     parent_id: str | None = None
     subtask_ids: list[str] = []
     context: dict[str, Any] = {}
+    phase: str | None = None
+    due_date: str | None = None
+    repo_path: str | None = None
+    app_stage: str | None = None
     created: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     order: int = 0
@@ -97,6 +102,49 @@ def _db_to_priority(value: int | None) -> TaskPriority:
     return "low"
 
 
+META_PREFIXES = ("phase:", "due:", "repo:")
+
+
+def _extract_meta(location_tags: list[str]) -> tuple[str | None, str | None, str | None]:
+    phase = None
+    due_date = None
+    repo_path = None
+    for tag in location_tags or []:
+        if tag.startswith("phase:"):
+            phase = tag.removeprefix("phase:")
+        elif tag.startswith("due:"):
+            due_date = tag.removeprefix("due:")
+        elif tag.startswith("repo:"):
+            repo_path = tag.removeprefix("repo:")
+    return phase, due_date, repo_path
+
+
+def _merge_location_tags(
+    current: list[str],
+    phase: str | None,
+    due_date: str | None,
+    repo_path: str | None,
+) -> list[str]:
+    base = [t for t in (current or []) if not t.startswith(META_PREFIXES)]
+    if phase:
+        base.append(f"phase:{phase}")
+    if due_date:
+        base.append(f"due:{due_date}")
+    if repo_path:
+        base.append(f"repo:{repo_path}")
+    return base
+
+
+def _derive_app_stage(status: DBTaskStatus) -> str:
+    if status in (DBTaskStatus.RADAR, DBTaskStatus.RUNWAY):
+        return "backlog"
+    if status == DBTaskStatus.FLIGHT:
+        return "active"
+    if status == DBTaskStatus.DONE:
+        return "done"
+    return "blocked"
+
+
 class TaskStore:
     """Database-backed task store (shared with Kanban dashboard)."""
 
@@ -134,6 +182,7 @@ class TaskStore:
             if parent:
                 parent_code = parent.task_code
 
+        phase, due_date, repo_path = _extract_meta(db_task.location_tags or [])
         return Task(
             id=db_task.task_code,
             title=db_task.title,
@@ -143,7 +192,11 @@ class TaskStore:
             tags=db_task.tags or [],
             parent_id=parent_code,
             subtask_ids=[t.task_code for t in subtasks],
-            context={},
+            context={"phase": phase, "due_date": due_date, "repo_path": repo_path},
+            phase=phase,
+            due_date=due_date,
+            repo_path=repo_path,
+            app_stage=_derive_app_stage(db_task.status),
             created=db_task.created_at,
             updated=db_task.updated_at,
             order=db_task.order,
@@ -172,7 +225,13 @@ class TaskStore:
                 description=description,
                 status=DBTaskStatus.RUNWAY,
                 priority=PRIORITY_TO_DB.get(priority, 3),
-                tags=tags or [],
+                tags=sanitize_tags(tags),
+                location_tags=_merge_location_tags(
+                    [],
+                    (context or {}).get("phase"),
+                    (context or {}).get("due_date"),
+                    (context or {}).get("repo_path"),
+                ),
                 parent_task_id=parent_task_id,
             )
             session.add(db_task)
@@ -193,6 +252,7 @@ class TaskStore:
         status: TaskStatus | None = None,
         priority: TaskPriority | None = None,
         tags: list[str] | None = None,
+        phase: str | None = None,
     ) -> list[Task]:
         """List tasks with optional filters."""
         with Session(engine) as session:
@@ -206,6 +266,8 @@ class TaskStore:
             tasks = [self._to_mcp_task(session, task) for task in db_tasks]
             if tags:
                 tasks = [t for t in tasks if any(tag in (t.tags or []) for tag in tags)]
+            if phase:
+                tasks = [t for t in tasks if t.phase == phase]
             return sorted(tasks, key=lambda t: (t.order, t.created))
 
     def update_task(
@@ -229,7 +291,16 @@ class TaskStore:
             if updates.get("priority") is not None:
                 db_task.priority = PRIORITY_TO_DB[updates["priority"]]
             if updates.get("tags") is not None:
-                db_task.tags = updates["tags"]
+                db_task.tags = sanitize_tags(updates["tags"])
+
+            if updates.get("context") is not None and isinstance(updates["context"], dict):
+                context = updates["context"]
+                db_task.location_tags = _merge_location_tags(
+                    db_task.location_tags,
+                    context.get("phase"),
+                    context.get("due_date"),
+                    context.get("repo_path"),
+                )
 
             db_task.updated_at = datetime.now(timezone.utc)
             session.add(db_task)
@@ -289,7 +360,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "context": {
                         "type": "object",
-                        "description": "Additional context (repo, branch, files, etc.)",
+                        "description": "Additional context. Supported keys: phase, due_date (YYYY-MM-DD), repo_path",
                     },
                 },
                 "required": ["title"],
@@ -315,6 +386,11 @@ async def list_tools() -> list[Tool]:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Filter by tags (matches any)",
+                    },
+                    "phase": {
+                        "type": "string",
+                        "enum": ["backlog", "analyze", "active", "testing", "done", "blocked"],
+                        "description": "Filter by workflow phase",
                     },
                 },
             },
@@ -357,7 +433,10 @@ async def list_tools() -> list[Tool]:
                         "type": "array",
                         "items": {"type": "string"},
                     },
-                    "context": {"type": "object"},
+                    "context": {
+                        "type": "object",
+                        "description": "Context updates. Supported keys: phase, due_date (YYYY-MM-DD), repo_path",
+                    },
                 },
                 "required": ["task_id"],
             },
@@ -543,6 +622,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 status=arguments.get("status"),
                 priority=arguments.get("priority"),
                 tags=arguments.get("tags"),
+                phase=arguments.get("phase"),
             )
             if not tasks:
                 return [TextContent(type="text", text="No tasks found.")]
@@ -599,7 +679,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             ]
 
         elif name == "start_task":
-            task = store.update_task(arguments["task_id"], status="in_progress")
+            task = store.update_task(
+                arguments["task_id"],
+                status="in_progress",
+                context={"phase": "active"},
+            )
             if not task:
                 return [
                     TextContent(type="text", text=f"Task {arguments['task_id']} not found.")
@@ -613,7 +697,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             ]
 
         elif name == "complete_task":
-            task = store.update_task(arguments["task_id"], status="done")
+            task = store.update_task(
+                arguments["task_id"],
+                status="done",
+                context={"phase": "done"},
+            )
             if not task:
                 return [
                     TextContent(type="text", text=f"Task {arguments['task_id']} not found.")
@@ -631,7 +719,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             task = store.update_task(
                 arguments["task_id"],
                 status="blocked",
-                context={"blocked_reason": reason},
+                context={"phase": "blocked", "blocked_reason": reason},
             )
             if not task:
                 return [
