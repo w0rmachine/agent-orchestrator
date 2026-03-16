@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16
+    image: docker.io/library/postgres:16
     container_name: ai-kanban-db
     environment:
       POSTGRES_USER: postgres
@@ -17,7 +17,7 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: docker.io/library/redis:7-alpine
     container_name: ai-kanban-redis
     ports:
       - "6379:6379"
@@ -37,6 +37,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/ai_kanban
       - REDIS_URL=redis://redis:6379/0
+      - OBSIDIAN_VAULT_PATH=/home/mwu/Work/notes/Work/TODO.md
     depends_on:
       db:
         condition: service_healthy
@@ -45,7 +46,7 @@ services:
     volumes:
       - ./backend:/app/backend
       - ./alembic.ini:/app/alembic.ini
-      - /home/mwu/Documents/notes:/home/mwu/Documents/notes
+      - /home/mwu/Work/notes:/home/mwu/Work/notes
     command: uv run uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
 
   worker:
@@ -56,6 +57,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/ai_kanban
       - REDIS_URL=redis://redis:6379/0
+      - OBSIDIAN_VAULT_PATH=/home/mwu/Work/notes/Work/TODO.md
     depends_on:
       db:
         condition: service_healthy
@@ -63,6 +65,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app/backend
+      - /home/mwu/Work/notes:/home/mwu/Work/notes
     command: uv run rq worker ai_tasks --url redis://redis:6379/0
 
   frontend:

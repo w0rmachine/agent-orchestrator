@@ -10,7 +10,12 @@ TASK_RE = re.compile(r"^(\s*)- \[([x ])\] (.+)$")
 ID_RE = re.compile(r"<!--\s*([A-Z]+-\d+(?:-[A-Z0-9]+)*)\s*-->")
 # Match [O-001], [TASK-001], etc. in brackets at start of title
 BRACKET_ID_RE = re.compile(r"^\[([A-Z]+-\d+(?:-[A-Z0-9]+)*)\]")
+# Extract numeric part from task ID (e.g., "O-023" -> 23)
+ID_NUMBER_RE = re.compile(r"^([A-Z]+)-(\d+)")
 TAG_RE = re.compile(r"#(\w+)")
+
+# Default prefix for auto-generated IDs
+DEFAULT_ID_PREFIX = "TASK"
 
 # Map section headers to task status
 HEADER_TO_STATUS = {
@@ -52,11 +57,46 @@ def extract_tags(line: str) -> list[str]:
     return TAG_RE.findall(line)
 
 
-def parse_markdown_file(filepath: str) -> list[dict[str, Any]]:
+def _scan_existing_ids(lines: list[str]) -> tuple[str, int]:
+    """Scan file to find existing ID prefix and max number.
+
+    Args:
+        lines: Lines from the markdown file
+
+    Returns:
+        Tuple of (prefix, max_number). E.g., ("O", 23) for IDs like O-001 to O-023.
+        Returns (DEFAULT_ID_PREFIX, 0) if no existing IDs found.
+    """
+    prefix = None
+    max_number = 0
+
+    for line in lines:
+        match = TASK_RE.match(line.rstrip("\n"))
+        if not match:
+            continue
+
+        content = match.group(3)
+        task_id = extract_task_id(content)
+        if not task_id:
+            continue
+
+        # Extract prefix and number from task ID
+        id_match = ID_NUMBER_RE.match(task_id)
+        if id_match:
+            id_prefix, id_num = id_match.groups()
+            if prefix is None:
+                prefix = id_prefix
+            max_number = max(max_number, int(id_num))
+
+    return (prefix or DEFAULT_ID_PREFIX, max_number)
+
+
+def parse_markdown_file(filepath: str, auto_generate_ids: bool = True) -> list[dict[str, Any]]:
     """Parse Obsidian markdown file into task dictionaries.
 
     Args:
         filepath: Path to markdown file
+        auto_generate_ids: If True, auto-generate IDs for tasks without them
 
     Returns:
         List of task dictionaries with structure:
@@ -76,6 +116,10 @@ def parse_markdown_file(filepath: str) -> list[dict[str, Any]]:
             lines = f.readlines()
     except FileNotFoundError:
         return []
+
+    # Scan for existing IDs to determine prefix and starting number
+    id_prefix, max_id_number = _scan_existing_ids(lines)
+    next_id_number = max_id_number + 1
 
     tasks = []
     current_status: TaskStatus | None = None
@@ -104,10 +148,14 @@ def parse_markdown_file(filepath: str) -> list[dict[str, Any]]:
         # Calculate indent level (2 spaces per level)
         indent_level = len(indent_str) // 2
 
-        # Extract task ID
+        # Extract task ID or auto-generate one
         task_code = extract_task_id(content)
         if not task_code:
-            continue
+            if not auto_generate_ids:
+                continue
+            # Auto-generate ID
+            task_code = f"{id_prefix}-{next_id_number:03d}"
+            next_id_number += 1
 
         # Remove ID comment or bracket from content
         title = ID_RE.sub("", content).strip()

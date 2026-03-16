@@ -1,14 +1,19 @@
 """FastAPI application entry point."""
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import SQLModel
+from sqlmodel import SQLModel, Session, select
 
 from backend.api import ai, environments, tasks
 from backend.config import settings
 from backend.database import engine
 from backend.mcp import router as mcp_router
+from backend.models.task import Task
+from backend.sync.markdown_parser import parse_markdown_file
+from backend.sync.markdown_writer import generate_markdown
 
 
 @asynccontextmanager
@@ -68,6 +73,50 @@ def root():
 def health():
     """Health check endpoint."""
     return {"status": "ok"}
+
+
+@app.get("/sync/status")
+def sync_status():
+    """Get sync and vault file status for frontend warnings."""
+    vault_path = Path(settings.obsidian_vault_path).expanduser()
+    vault_exists = vault_path.exists()
+
+    parse_error: str | None = None
+    parsed_task_count = 0
+    if vault_exists:
+        try:
+            parsed_task_count = len(parse_markdown_file(str(vault_path)))
+        except Exception as exc:
+            parse_error = str(exc)
+
+    with Session(engine) as session:
+        db_task_count = len(session.exec(select(Task)).all())
+
+    return {
+        "sync_enabled": settings.enable_sync,
+        "vault_path": str(vault_path),
+        "vault_exists": vault_exists,
+        "parsed_task_count": parsed_task_count,
+        "db_task_count": db_task_count,
+        "parse_error": parse_error,
+    }
+
+
+@app.post("/sync")
+async def trigger_sync():
+    """Trigger one sync pass from markdown vault to database."""
+    from backend.sync.sync_service import sync_service
+    await sync_service._sync_from_vault()
+    return {"status": "ok"}
+
+
+@app.get("/export/obsidian", response_class=PlainTextResponse)
+def export_obsidian() -> str:
+    """Export current database tasks to Obsidian markdown format."""
+    with Session(engine) as session:
+        db_tasks = session.exec(select(Task)).all()
+
+    return generate_markdown(list(db_tasks))
 
 
 # WebSocket manager for broadcasting

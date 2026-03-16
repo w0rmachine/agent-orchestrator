@@ -15,7 +15,7 @@ export default function Column({ id, label, icon, color, tasks }: ColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id })
 
   return (
-    <div className="flex-shrink-0 w-80 flex flex-direction flex-col bg-bgAlt rounded-lg border border-border overflow-hidden">
+    <div className="flex-shrink-0 w-80 max-w-[calc(100vw-2rem)] flex flex-col bg-bgAlt rounded-lg border border-border overflow-hidden">
       {/* Column Header */}
       <div
         className="px-4 py-3 border-b border-border flex items-center gap-2"

@@ -11,18 +11,16 @@ Usage:
     uv run mcp-server
 
 Configuration:
-    Set TASK_STORE_PATH to persist tasks (default: ./tasks.json)
+    Uses the main application database (same source as Kanban dashboard)
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
-import os
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Literal
+from uuid import UUID
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -31,6 +29,7 @@ from mcp.types import (
     Tool,
 )
 from pydantic import BaseModel, Field
+from sqlmodel import Session, select
 
 from backend.ai_manager import (
     analyze_task_complexity,
@@ -38,6 +37,9 @@ from backend.ai_manager import (
     format_analysis_for_display,
     format_batch_analysis_for_display,
 )
+from backend.database import engine
+from backend.models.task import Task as DBTask
+from backend.models.task import TaskStatus as DBTaskStatus
 
 # ── Types ─────────────────────────────────────────────────────────────────────
 TaskStatus = Literal["todo", "in_progress", "done", "blocked"]
@@ -60,34 +62,92 @@ class Task(BaseModel):
     order: int = 0
 
 
+STATUS_TO_DB: dict[TaskStatus, list[DBTaskStatus]] = {
+    "todo": [DBTaskStatus.RADAR, DBTaskStatus.RUNWAY],
+    "in_progress": [DBTaskStatus.FLIGHT],
+    "done": [DBTaskStatus.DONE],
+    "blocked": [DBTaskStatus.BLOCKED],
+}
+
+DB_TO_STATUS: dict[DBTaskStatus, TaskStatus] = {
+    DBTaskStatus.RADAR: "todo",
+    DBTaskStatus.RUNWAY: "todo",
+    DBTaskStatus.FLIGHT: "in_progress",
+    DBTaskStatus.DONE: "done",
+    DBTaskStatus.BLOCKED: "blocked",
+}
+
+PRIORITY_TO_DB: dict[TaskPriority, int] = {
+    "critical": 1,
+    "high": 2,
+    "normal": 3,
+    "low": 5,
+}
+
+
+def _db_to_priority(value: int | None) -> TaskPriority:
+    if value is None:
+        return "normal"
+    if value <= 1:
+        return "critical"
+    if value <= 2:
+        return "high"
+    if value <= 3:
+        return "normal"
+    return "low"
+
+
 class TaskStore:
-    """Simple JSON-backed task store."""
+    """Database-backed task store (shared with Kanban dashboard)."""
 
-    def __init__(self, path: str = "./tasks.json"):
-        self.path = Path(path)
-        self.tasks: dict[str, Task] = {}
-        self.load()
-
-    def load(self):
-        """Load tasks from disk."""
-        if not self.path.exists():
-            return
+    def _find_db_task(self, session: Session, task_id: str) -> DBTask | None:
+        """Find task by UUID or task_code."""
         try:
-            data = json.loads(self.path.read_text())
-            for task_data in data.get("tasks", []):
-                task = Task(**task_data)
-                self.tasks[task.id] = task
-        except Exception as e:
-            print(f"Warning: Could not load tasks from {self.path}: {e}")
+            task_uuid = UUID(task_id)
+            task = session.get(DBTask, task_uuid)
+            if task:
+                return task
+        except ValueError:
+            pass
 
-    def save(self):
-        """Persist tasks to disk."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "tasks": [task.model_dump(mode="json") for task in self.tasks.values()],
-            "updated": datetime.now(timezone.utc).isoformat(),
-        }
-        self.path.write_text(json.dumps(data, indent=2))
+        return session.exec(select(DBTask).where(DBTask.task_code == task_id)).first()
+
+    def _next_task_code(self, session: Session) -> str:
+        existing = session.exec(select(DBTask.task_code)).all()
+        max_num = 0
+        for code in existing:
+            if not code.startswith("MCP-"):
+                continue
+            try:
+                max_num = max(max_num, int(code.split("-")[1]))
+            except Exception:
+                continue
+        return f"MCP-{max_num + 1:04d}"
+
+    def _to_mcp_task(self, session: Session, db_task: DBTask) -> Task:
+        subtasks = session.exec(
+            select(DBTask).where(DBTask.parent_task_id == db_task.id)
+        ).all()
+        parent_code = None
+        if db_task.parent_task_id:
+            parent = session.get(DBTask, db_task.parent_task_id)
+            if parent:
+                parent_code = parent.task_code
+
+        return Task(
+            id=db_task.task_code,
+            title=db_task.title,
+            description=db_task.description,
+            status=DB_TO_STATUS.get(db_task.status, "todo"),
+            priority=_db_to_priority(db_task.priority),
+            tags=db_task.tags or [],
+            parent_id=parent_code,
+            subtask_ids=[t.task_code for t in subtasks],
+            context={},
+            created=db_task.created_at,
+            updated=db_task.updated_at,
+            order=db_task.order,
+        )
 
     def create_task(
         self,
@@ -96,22 +156,37 @@ class TaskStore:
         priority: TaskPriority = "normal",
         tags: list[str] | None = None,
         context: dict[str, Any] | None = None,
+        parent_id: str | None = None,
     ) -> Task:
-        """Create a new task."""
-        task = Task(
-            title=title,
-            description=description,
-            priority=priority,
-            tags=tags or [],
-            context=context or {},
-        )
-        self.tasks[task.id] = task
-        self.save()
-        return task
+        """Create a new task in DB."""
+        with Session(engine) as session:
+            parent_task_id: UUID | None = None
+            if parent_id:
+                parent_task = self._find_db_task(session, parent_id)
+                if parent_task:
+                    parent_task_id = parent_task.id
+
+            db_task = DBTask(
+                task_code=self._next_task_code(session),
+                title=title,
+                description=description,
+                status=DBTaskStatus.RUNWAY,
+                priority=PRIORITY_TO_DB.get(priority, 3),
+                tags=tags or [],
+                parent_task_id=parent_task_id,
+            )
+            session.add(db_task)
+            session.commit()
+            session.refresh(db_task)
+            return self._to_mcp_task(session, db_task)
 
     def get_task(self, task_id: str) -> Task | None:
         """Get a task by ID."""
-        return self.tasks.get(task_id)
+        with Session(engine) as session:
+            db_task = self._find_db_task(session, task_id)
+            if not db_task:
+                return None
+            return self._to_mcp_task(session, db_task)
 
     def list_tasks(
         self,
@@ -120,14 +195,18 @@ class TaskStore:
         tags: list[str] | None = None,
     ) -> list[Task]:
         """List tasks with optional filters."""
-        tasks = list(self.tasks.values())
-        if status:
-            tasks = [t for t in tasks if t.status == status]
-        if priority:
-            tasks = [t for t in tasks if t.priority == priority]
-        if tags:
-            tasks = [t for t in tasks if any(tag in t.tags for tag in tags)]
-        return sorted(tasks, key=lambda t: (t.order, t.created))
+        with Session(engine) as session:
+            query = select(DBTask)
+            if status:
+                query = query.where(DBTask.status.in_(STATUS_TO_DB[status]))  # type: ignore[arg-type]
+            if priority:
+                query = query.where(DBTask.priority == PRIORITY_TO_DB[priority])
+            db_tasks = session.exec(query).all()
+
+            tasks = [self._to_mcp_task(session, task) for task in db_tasks]
+            if tags:
+                tasks = [t for t in tasks if any(tag in (t.tags or []) for tag in tags)]
+            return sorted(tasks, key=lambda t: (t.order, t.created))
 
     def update_task(
         self,
@@ -135,30 +214,49 @@ class TaskStore:
         **updates,
     ) -> Task | None:
         """Update a task."""
-        task = self.tasks.get(task_id)
-        if not task:
-            return None
+        with Session(engine) as session:
+            db_task = self._find_db_task(session, task_id)
+            if not db_task:
+                return None
 
-        for field, value in updates.items():
-            if hasattr(task, field) and value is not None:
-                setattr(task, field, value)
+            if updates.get("title") is not None:
+                db_task.title = updates["title"]
+            if updates.get("description") is not None:
+                db_task.description = updates["description"]
+            if updates.get("status") is not None:
+                status = updates["status"]
+                db_task.status = STATUS_TO_DB[status][0]
+            if updates.get("priority") is not None:
+                db_task.priority = PRIORITY_TO_DB[updates["priority"]]
+            if updates.get("tags") is not None:
+                db_task.tags = updates["tags"]
 
-        task.updated = datetime.now(timezone.utc)
-        self.save()
-        return task
+            db_task.updated_at = datetime.now(timezone.utc)
+            session.add(db_task)
+            session.commit()
+            session.refresh(db_task)
+            return self._to_mcp_task(session, db_task)
 
     def delete_task(self, task_id: str) -> bool:
         """Delete a task."""
-        if task_id in self.tasks:
-            self.tasks.pop(task_id)
-            self.save()
+        with Session(engine) as session:
+            db_task = self._find_db_task(session, task_id)
+            if not db_task:
+                return False
+            session.delete(db_task)
+            session.commit()
             return True
-        return False
 
 
 # ── MCP Server ────────────────────────────────────────────────────────────────
 app = Server("agent-orchestrator")
-store = TaskStore(os.getenv("TASK_STORE_PATH", "./tasks.json"))
+store = TaskStore()
+
+
+async def _sync_markdown() -> None:
+    """Sync DB changes to markdown vault when MCP mutates tasks."""
+    from backend.sync.sync_service import sync_service
+    await sync_service.sync_to_vault()
 
 
 @app.list_tools()
@@ -432,6 +530,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 tags=arguments.get("tags", []),
                 context=arguments.get("context", {}),
             )
+            await _sync_markdown()
             return [
                 TextContent(
                     type="text",
@@ -491,6 +590,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             task = store.update_task(task_id, **arguments)
             if not task:
                 return [TextContent(type="text", text=f"Task {task_id} not found.")]
+            await _sync_markdown()
             return [
                 TextContent(
                     type="text",
@@ -504,6 +604,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 return [
                     TextContent(type="text", text=f"Task {arguments['task_id']} not found.")
                 ]
+            await _sync_markdown()
             return [
                 TextContent(
                     type="text",
@@ -517,6 +618,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 return [
                     TextContent(type="text", text=f"Task {arguments['task_id']} not found.")
                 ]
+            await _sync_markdown()
             return [
                 TextContent(
                     type="text",
@@ -535,6 +637,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 return [
                     TextContent(type="text", text=f"Task {arguments['task_id']} not found.")
                 ]
+            await _sync_markdown()
             return [
                 TextContent(
                     type="text",
@@ -544,6 +647,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         elif name == "delete_task":
             if store.delete_task(arguments["task_id"]):
+                await _sync_markdown()
                 return [
                     TextContent(type="text", text=f"Deleted task {arguments['task_id']}")
                 ]
@@ -566,14 +670,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     priority=subtask_data.get("priority", parent_task.priority),
                     tags=parent_task.tags + ["split"],
                     context={"parent_id": parent_task.id},
+                    parent_id=parent_task.id,
                 )
-                subtask.parent_id = parent_task.id
                 subtask_ids.append(subtask.id)
-                store.save()
 
-            parent_task.subtask_ids = subtask_ids
-            parent_task.tags = list(set(parent_task.tags + ["parent"]))
-            store.save()
+            await _sync_markdown()
 
             result = f"Split task {parent_task.id} into {len(subtask_ids)} subtasks:\n\n"
             for subtask_id in subtask_ids:
@@ -585,13 +686,18 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         elif name == "reorganize_tasks":
             results = []
+            mutated = False
             for update in arguments["updates"]:
                 task_id = update.pop("task_id")
                 task = store.update_task(task_id, **update)
                 if task:
                     results.append(f"  ✓ Updated {task.id}: {task.title}")
+                    mutated = True
                 else:
                     results.append(f"  ✗ Task {task_id} not found")
+
+            if mutated:
+                await _sync_markdown()
 
             return [
                 TextContent(

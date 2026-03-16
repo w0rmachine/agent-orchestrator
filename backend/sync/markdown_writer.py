@@ -34,7 +34,7 @@ def generate_markdown(tasks: list[Task]) -> str:
 
     for status in TaskStatus:
         # Section header
-        sections.append(f"## {status.value.capitalize()}")
+        sections.append(f"## {status.value.upper()}")
         sections.append("")
 
         status_tasks = tasks_by_status[status]

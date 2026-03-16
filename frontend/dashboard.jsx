@@ -71,6 +71,24 @@ const stageToStack = (stage) => {
   return "manager";
 };
 
+const STATUS_TO_STAGE = {
+  radar: "inbox",
+  runway: "backlog",
+  flight: "active",
+  blocked: "blocked",
+  done: "done",
+};
+
+const STAGE_TO_STATUS = {
+  inbox: "radar",
+  analysis: "radar",
+  backlog: "runway",
+  active: "flight",
+  testing: "flight",
+  blocked: "blocked",
+  done: "done",
+};
+
 // ─── Micro-components ─────────────────────────────────────────────────────────
 const Pill = ({color,children,sm}) => (
   <span style={{
@@ -161,12 +179,18 @@ function RadarSweep({ tasks }) {
   return <canvas ref={canvasRef} width={160} height={160} style={{borderRadius:"50%",border:`1px solid ${T.border}`}}/>;
 }
 
-function TaskCard({ task, onMove }) {
+function TaskCard({ task, onMove, onDragStart, onDragEnd }) {
   const stack = STACKS[stageToStack(task.stage)];
-  const stage = STAGES.find(s=>s.id===task.stage) || STAGES[0];
   const [hover, setHover] = useState(false);
   return (
     <div
+      draggable
+      onDragStart={(e)=>{
+        e.dataTransfer.setData("text/plain", task.id);
+        e.dataTransfer.effectAllowed = "move";
+        onDragStart?.(task.id);
+      }}
+      onDragEnd={()=>onDragEnd?.()}
       onMouseEnter={()=>setHover(true)}
       onMouseLeave={()=>setHover(false)}
       style={{
@@ -174,45 +198,42 @@ function TaskCard({ task, onMove }) {
         border:`1px solid ${hover ? stack.color+"60" : T.border}`,
         borderLeft:`3px solid ${stack.color}`,
         borderRadius:6, padding:"8px 10px",
-        marginBottom:6, cursor:"pointer",
+        marginBottom:6, cursor:"grab",
         transition:"all .2s",
         boxShadow: hover ? `0 0 12px ${stack.color}20` : "none",
       }}
     >
-      <div style={{display:"flex",alignItems:"flex-start",gap:6,marginBottom:5}}>
-        <span style={{fontSize:8,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",flexShrink:0,marginTop:1}}>{task.id}</span>
+      <div style={{display:"flex",alignItems:"flex-start",gap:6,marginBottom:6}}>
         {task.priority==="high" && <span style={{fontSize:8,color:T.red}}>●</span>}
         {task.priority==="critical" && <span style={{fontSize:8,color:T.red}}>◆</span>}
-        <span style={{fontSize:10,color:T.text,lineHeight:1.4,flex:1}}>{task.title}</span>
+        <span style={{
+          fontSize:12,
+          color:T.text,
+          lineHeight:1.45,
+          flex:1,
+          overflowWrap:"anywhere",
+          wordBreak:"break-word",
+        }}>{task.title}</span>
       </div>
       <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"}}>
         <Pill color={stack.color} sm>{stack.icon} {stack.id}</Pill>
-        <Pill color={T.textDim} sm>{(task.source||"task").toUpperCase()}</Pill>
+        <Pill color={T.textDim} sm>{task.task_code || task.id}</Pill>
         <span style={{fontSize:8,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",marginLeft:"auto"}}>{fmtAge(new Date(task.updated))}</span>
       </div>
-      {hover && (
-        <div style={{display:"flex",gap:3,marginTop:6,flexWrap:"wrap"}}>
-          {STAGES.filter(s=>s.id!==task.stage).slice(0,3).map(s=>(
-            <button key={s.id} onClick={()=>onMove(task.id,s.id)} style={{
-              fontSize:8, padding:"2px 6px", borderRadius:3,
-              background:`${s.color}15`, border:`1px solid ${s.color}40`,
-              color:s.color, cursor:"pointer", fontFamily:"'IBM Plex Mono',monospace",
-            }}>→ {s.label}</button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
 
-function KanbanColumn({ stage, tasks, onMove }) {
+function KanbanColumn({ stage, tasks, onMove, onDropTask, onDragStage, isDropTarget, draggingTaskId, onTaskDragStart, onTaskDragEnd }) {
   const count = tasks.length;
   return (
     <div style={{
-      flex:"0 0 200px", display:"flex", flexDirection:"column",
+      display:"flex", flexDirection:"column",
       background:T.bgAlt, borderRadius:8,
-      border:`1px solid ${T.border}`,
+      border:`1px solid ${isDropTarget ? stage.color : T.border}`,
       overflow:"hidden",
+      maxHeight:"min(52vh, 460px)",
+      boxShadow: isDropTarget ? `0 0 0 1px ${stage.color} inset` : "none",
     }}>
       {/* Column header */}
       <div style={{
@@ -231,8 +252,28 @@ function KanbanColumn({ stage, tasks, onMove }) {
           fontFamily:"'IBM Plex Mono',monospace",
         }}>{count}</span>
       </div>
-      <div style={{flex:1,overflowY:"auto",padding:"8px",minHeight:80}}>
-        {tasks.map(t=><TaskCard key={t.id} task={t} onMove={onMove}/>)}
+      <div
+        style={{flex:1,overflowY:"auto",padding:"8px",minHeight:0}}
+        onDragOver={(e)=>{
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          onDragStage?.(stage.id);
+        }}
+        onDrop={(e)=>{
+          e.preventDefault();
+          const taskId = e.dataTransfer.getData("text/plain") || draggingTaskId;
+          if (taskId) {
+            onDropTask?.(taskId, stage.id);
+          }
+        }}
+      >
+        {tasks.map(t=><TaskCard key={t.id} task={t} onMove={onMove} onDragStart={(taskId)=>{
+          onTaskDragStart?.(taskId);
+          onDragStage?.(stage.id);
+        }} onDragEnd={()=>{
+          onTaskDragEnd?.();
+          onDragStage?.(null);
+        }} />)}
         {count===0 && (
           <div style={{textAlign:"center",padding:"20px 0",fontSize:9,color:T.textFaint,fontFamily:"'IBM Plex Mono',monospace"}}>
             — empty —
@@ -313,6 +354,9 @@ function StackLane({ stack, tasks, onMove }) {
 export default function RadarRunwayDashboard() {
   const [tasks, setTasks]         = useState([]);
   const [logs,  setLogs]          = useState([]);
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [draggingTaskId, setDraggingTaskId] = useState(null);
+  const [dragTargetStage, setDragTargetStage] = useState(null);
   const [copied,setCopied]        = useState(false);
   const [view,  setView]          = useState("kanban"); // kanban | stacks
   const [obSync,setObSync]        = useState(false);
@@ -321,7 +365,6 @@ export default function RadarRunwayDashboard() {
   const logRef = useRef(null);
 
   const API_BASE = "http://localhost:8000";
-  const WS_URL = "ws://localhost:8000/ws";
 
   const addLog = useCallback((msg)=>{
     setLogs(l=>[...l,{id:Date.now()+Math.random(),src:"system",msg,ts:new Date()}].slice(-200));
@@ -334,64 +377,53 @@ export default function RadarRunwayDashboard() {
     });
   },[]);
 
-  const moveTask = useCallback((id,newStage)=>{
-    if(newStage==="active"){
-      fetch(`${API_BASE}/tickets/${id}/activate`,{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({}),
-      }).catch(()=>addLog(`Failed to activate ${id}`));
-      return;
-    }
-    fetch(`${API_BASE}/tickets/${id}`,{
-      method:"PATCH",
-      headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({stage:newStage}),
-    }).catch(()=>addLog(`Failed to move ${id} → ${newStage}`));
+  const fetchTasks = useCallback(()=>{
+    return fetch(`${API_BASE}/tasks/`)
+      .then(r => r.json())
+      .then((items)=>{
+        const mapped = (items || []).map((t)=>({
+          ...t,
+          stage: STATUS_TO_STAGE[t.status] || "inbox",
+        }));
+        setTasks(mapped);
+      })
+      .catch(()=>addLog("Failed to fetch tasks from /tasks"));
   },[addLog]);
 
-  useEffect(()=>{
-    let ws;
-    let closed = false;
-    const connect = ()=>{
-      ws = new WebSocket(WS_URL);
-      ws.onmessage = (evt)=>{
-        const data = JSON.parse(evt.data);
-        if(data.type==="init"){
-          setTasks(data.tickets || []);
-          setLogs((data.logs || []).map(l=>({
-            id:l.id, src:"system", msg:l.message, ts:new Date(l.ts),
-          })));
-        }
-        if(data.type==="ticket_created"){
-          setTasks(prev=>[...prev,data.ticket]);
-        }
-        if(data.type==="ticket_updated"){
-          setTasks(prev=>prev.map(t=>t.id===data.ticket.id?data.ticket:t));
-        }
-        if(data.type==="ticket_deleted"){
-          setTasks(prev=>prev.filter(t=>t.id!==data.ticket_id));
-        }
-        if(data.type==="log"){
-          const l = data.log;
-          setLogs(prev=>[...prev,{id:l.id,src:"system",msg:l.message,ts:new Date(l.ts)}].slice(-200));
-        }
-        if(data.type==="sync_complete"){
-          setObSync(true);
-          setTimeout(()=>setObSync(false),1200);
-        }
-      };
-      ws.onclose = ()=>{
-        if(closed) return;
-        setTimeout(connect, 1200);
-      };
-    };
-    connect();
-    return ()=>{
-      closed = true;
-      if(ws) ws.close();
-    };
+  const fetchSyncStatus = useCallback(()=>{
+    return fetch(`${API_BASE}/sync/status`)
+      .then(r => r.json())
+      .then(setSyncStatus)
+      .catch(()=>{
+        setSyncStatus({
+          vault_exists: false,
+          parse_error: "Could not load /sync/status",
+          vault_path: "(unknown)",
+          db_task_count: 0,
+        });
+      });
   },[]);
+
+  const moveTask = useCallback((id,newStage)=>{
+    const newStatus = STAGE_TO_STATUS[newStage] || "radar";
+    fetch(`${API_BASE}/tasks/${id}/move?status=${newStatus}`,{
+      method:"POST",
+    })
+      .then(()=>fetchTasks())
+      .catch(()=>addLog(`Failed to move ${id} → ${newStage}`));
+  },[addLog, fetchTasks]);
+
+  useEffect(()=>{
+    fetchTasks();
+    fetchSyncStatus();
+
+    const intervalId = setInterval(()=>{
+      fetchTasks();
+      fetchSyncStatus();
+    }, 5000);
+
+    return ()=>clearInterval(intervalId);
+  },[fetchTasks, fetchSyncStatus]);
 
   useEffect(()=>{ logRef.current?.scrollTo({top:logRef.current.scrollHeight,behavior:"smooth"}); },[logs]);
 
@@ -515,53 +547,92 @@ export default function RadarRunwayDashboard() {
           </div>
         </div>
 
-        {/* ── RADAR RUNWAY EXPLANATION BAR ── */}
-        <div style={{
-          display:"flex",gap:0,borderRadius:8,overflow:"hidden",
-          border:`1px solid ${T.border}`,
-        }}>
-          {STAGES.map((s,i)=>{
-            const count = tasks.filter(t=>t.stage===s.id).length;
-            return (
-              <div key={s.id} style={{
-                flex:1,padding:"7px 10px",
-                background:`${s.color}0a`,
-                borderRight:i<STAGES.length-1?`1px solid ${T.border}`:"none",
-                display:"flex",flexDirection:"column",alignItems:"center",gap:2,
-              }} title={s.tip}>
-                <div style={{display:"flex",alignItems:"center",gap:4}}>
-                  <span style={{fontSize:12,color:s.color}}>{s.icon}</span>
-                  <span style={{fontSize:8,fontFamily:"'IBM Plex Mono',monospace",color:s.color,fontWeight:700,letterSpacing:"0.08em"}}>{s.label}</span>
-                </div>
-                <div style={{fontSize:16,fontWeight:900,color:s.color,fontFamily:"'IBM Plex Mono',monospace",lineHeight:1}}>{count}</div>
-              </div>
-            );
-          })}
-        </div>
-
         {/* ── MAIN CONTENT ── */}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 260px",gap:10,flex:1}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr",gap:10,flex:1}}>
 
           {/* Left: main view */}
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {syncStatus && !syncStatus.vault_exists && (
+              <div style={{
+                border:`1px solid ${T.red}`,
+                background:`${T.red}12`,
+                color:T.red,
+                borderRadius:8,
+                padding:"10px 12px",
+                fontSize:11,
+                fontFamily:"'IBM Plex Mono',monospace",
+              }}>
+                ⚠ Kanban file not found: {syncStatus.vault_path}
+              </div>
+            )}
+
+            {syncStatus?.parse_error && (
+              <div style={{
+                border:`1px solid ${T.red}`,
+                background:`${T.red}12`,
+                color:T.red,
+                borderRadius:8,
+                padding:"10px 12px",
+                fontSize:11,
+                fontFamily:"'IBM Plex Mono',monospace",
+              }}>
+                ⚠ Failed to parse TODO.md: {syncStatus.parse_error}
+              </div>
+            )}
+
+            {syncStatus?.vault_exists && tasks.length===0 && (
+              <div style={{
+                border:`1px solid ${T.amber}`,
+                background:`${T.amber}12`,
+                color:T.amber,
+                borderRadius:8,
+                padding:"10px 12px",
+                fontSize:11,
+                fontFamily:"'IBM Plex Mono',monospace",
+              }}>
+                ⚠ No tasks found in TODO.md ({syncStatus.vault_path}). Add task lines like: - [ ] My task
+              </div>
+            )}
 
             {view==="kanban" && (
               <div style={{
                 background:T.bgAlt,borderRadius:10,border:`1px solid ${T.border}`,
                 padding:12,overflow:"hidden",
+                display:"flex",flexDirection:"column",
               }}>
                 <div style={{fontSize:9,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.1em",marginBottom:10,display:"flex",alignItems:"center",gap:8}}>
                   <span style={{color:T.amber}}>◈</span> KANBAN BOARD
                   <span style={{color:T.textFaint}}>— hover card to move stage —</span>
                   <span style={{marginLeft:"auto",color:T.purple,fontSize:8}}>syncs to Obsidian Work/TODO.md</span>
                 </div>
-                <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}}>
+                <div style={{
+                  display:"grid",
+                  gridTemplateColumns:`repeat(${STAGES.length}, minmax(0, 1fr))`,
+                  gap:8,
+                  paddingBottom:4,
+                  alignItems:"stretch",
+                  flex:1,
+                  minHeight:0,
+                }}>
                   {STAGES.map(s=>(
                     <KanbanColumn
                       key={s.id}
                       stage={s}
                       tasks={tasks.filter(t=>t.stage===s.id)}
                       onMove={moveTask}
+                      draggingTaskId={draggingTaskId}
+                      isDropTarget={dragTargetStage===s.id}
+                      onDragStage={(stageId)=>setDragTargetStage(stageId)}
+                      onTaskDragStart={(taskId)=>setDraggingTaskId(taskId)}
+                      onTaskDragEnd={()=>setDraggingTaskId(null)}
+                      onDropTask={(taskId, stageId)=>{
+                        const task = tasks.find(t=>t.id===taskId);
+                        if (task && task.stage !== stageId) {
+                          moveTask(taskId, stageId);
+                        }
+                        setDraggingTaskId(null);
+                        setDragTargetStage(null);
+                      }}
                     />
                   ))}
                 </div>
@@ -707,30 +778,6 @@ export default function RadarRunwayDashboard() {
                   </div>
                 ))}
               </div>
-            </div>
-
-            {/* Stats */}
-            <div style={{
-              background:T.surface,border:`1px solid ${T.border}`,
-              borderRadius:10,padding:"10px 12px",
-            }}>
-              <div style={{fontSize:9,color:T.textDim,fontFamily:"'IBM Plex Mono',monospace",letterSpacing:"0.1em",marginBottom:8}}>▸ STATS</div>
-              {[
-                {label:"Total tasks",  val:tasks.length,             color:T.text},
-                {label:"In flight",    val:tasks.filter(t=>t.stage==="active").length, color:T.amber},
-                {label:"Done",         val:tasks.filter(t=>t.stage==="done").length,  color:T.green},
-                {label:"Blocked",      val:tasks.filter(t=>t.stage==="blocked").length,color:T.red},
-                {label:"High priority",val:tasks.filter(t=>t.priority==="high").length, color:T.red},
-              ].map(s=>(
-                <div key={s.label} style={{
-                  display:"flex",justifyContent:"space-between",alignItems:"center",
-                  padding:"4px 0",borderBottom:`1px solid ${T.border}`,
-                  fontSize:10,fontFamily:"'IBM Plex Mono',monospace",
-                }}>
-                  <span style={{color:T.textDim}}>{s.label}</span>
-                  <span style={{color:s.color,fontWeight:700}}>{s.val}</span>
-                </div>
-              ))}
             </div>
 
             {/* Obsidian integration tip */}

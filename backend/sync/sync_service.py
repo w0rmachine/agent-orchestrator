@@ -1,5 +1,6 @@
 """Markdown sync service integrating vault watching and database sync."""
 import asyncio
+import contextlib
 from pathlib import Path
 
 from sqlmodel import Session, select
@@ -10,7 +11,7 @@ from backend.models.task import Task, TaskStatus
 from backend.sync.markdown_parser import parse_markdown_file
 from backend.sync.markdown_writer import generate_markdown
 from backend.sync.merge import merge_task, should_delete_task
-from backend.sync.vault_watcher import VaultWatcher
+from backend.sync.vault_watcher import VaultWatcher, compute_file_hash
 
 
 class SyncService:
@@ -20,6 +21,8 @@ class SyncService:
         """Initialize sync service."""
         self.vault_path = Path(settings.obsidian_vault_path).expanduser()
         self.watcher: VaultWatcher | None = None
+        self._poll_task: asyncio.Task | None = None
+        self._last_seen_hash: str = ""
         self.running = False
         self.syncing = False  # Prevent concurrent syncs
 
@@ -40,6 +43,7 @@ class SyncService:
 
         # Do initial sync from vault to DB
         await self._sync_from_vault()
+        self._last_seen_hash = compute_file_hash(str(self.vault_path))
 
         # Start watching for changes
         self.watcher = VaultWatcher(
@@ -47,11 +51,20 @@ class SyncService:
             self._on_vault_changed,
         )
         self.watcher.start()
+
+        # Polling fallback for environments where file events are missed
+        self._poll_task = asyncio.create_task(self._poll_for_changes())
         self.running = True
         print(f"Sync service started, watching {self.vault_path}")
 
     async def stop(self):
         """Stop the sync service."""
+        if self._poll_task and not self._poll_task.done():
+            self._poll_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._poll_task
+            self._poll_task = None
+
         if self.watcher:
             self.watcher.stop()
             self.watcher = None
@@ -65,7 +78,18 @@ class SyncService:
             new_hash: New file hash
         """
         print(f"Vault changed (hash: {new_hash[:8]}...), syncing to database")
+        self._last_seen_hash = new_hash
         await self._sync_from_vault()
+
+    async def _poll_for_changes(self):
+        """Poll file hash as fallback when watchdog events are missed."""
+        while True:
+            await asyncio.sleep(2.0)
+            current_hash = compute_file_hash(str(self.vault_path))
+            if current_hash and current_hash != self._last_seen_hash:
+                print("Vault changed (poll), syncing to database")
+                self._last_seen_hash = current_hash
+                await self._sync_from_vault()
 
     async def _sync_from_vault(self):
         """Sync changes from vault file to database."""

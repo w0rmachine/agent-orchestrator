@@ -14,6 +14,12 @@ from backend.models.task_event import TaskEvent, TaskEventType
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
+async def _sync_markdown() -> None:
+    """Sync database state back to markdown vault."""
+    from backend.sync.sync_service import sync_service
+    await sync_service.sync_to_vault()
+
+
 class TaskCreate(BaseModel):
     """Task creation schema."""
 
@@ -94,7 +100,7 @@ def get_task(
 
 
 @router.post("/", response_model=TaskResponse, status_code=201)
-def create_task(
+async def create_task(
     data: TaskCreate,
     session: Annotated[Session, Depends(get_session)],
 ) -> Task:
@@ -131,11 +137,12 @@ def create_task(
 
     session.commit()
     session.refresh(task)
+    await _sync_markdown()
     return task
 
 
 @router.patch("/{task_id}", response_model=TaskResponse)
-def update_task(
+async def update_task(
     task_id: UUID,
     data: TaskUpdate,
     session: Annotated[Session, Depends(get_session)],
@@ -174,11 +181,12 @@ def update_task(
     session.add(task)
     session.commit()
     session.refresh(task)
+    await _sync_markdown()
     return task
 
 
 @router.delete("/{task_id}", status_code=204)
-def delete_task(
+async def delete_task(
     task_id: UUID,
     session: Annotated[Session, Depends(get_session)],
 ) -> None:
@@ -189,10 +197,11 @@ def delete_task(
 
     session.delete(task)
     session.commit()
+    await _sync_markdown()
 
 
 @router.post("/{task_id}/move", response_model=TaskResponse)
-def move_task(
+async def move_task(
     task_id: UUID,
     status: TaskStatus,
     session: Annotated[Session, Depends(get_session)],
@@ -224,4 +233,5 @@ def move_task(
     session.add(event)
     session.commit()
     session.refresh(task)
+    await _sync_markdown()
     return task

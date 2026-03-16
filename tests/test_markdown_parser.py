@@ -122,3 +122,192 @@ def test_parse_nonexistent_file():
     """Test parsing nonexistent file."""
     tasks = parse_markdown_file("/nonexistent/file.md")
     assert tasks == []
+
+
+def test_parse_bracket_id_format():
+    """Test parsing tasks with bracket ID notation [O-001]."""
+    markdown = """## Backlog
+
+- [ ] [O-001] Python Registry
+- [ ] [O-002] Add coverage to backend
+- [ ] [TASK-003] Another task with different prefix
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".md") as f:
+        f.write(markdown)
+        filepath = f.name
+
+    try:
+        tasks = parse_markdown_file(filepath)
+
+        assert len(tasks) == 3
+        assert tasks[0]["task_code"] == "O-001"
+        assert tasks[0]["title"] == "Python Registry"
+        assert tasks[1]["task_code"] == "O-002"
+        assert tasks[2]["task_code"] == "TASK-003"
+
+    finally:
+        Path(filepath).unlink()
+
+
+def test_auto_generate_ids():
+    """Test auto-generating IDs for tasks without them."""
+    markdown = """## In Progress
+
+- [ ] Task without ID
+- [ ] Another task without ID
+
+## Backlog
+
+- [ ] [O-010] Existing task with ID
+- [ ] [O-005] Earlier ID number
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".md") as f:
+        f.write(markdown)
+        filepath = f.name
+
+    try:
+        tasks = parse_markdown_file(filepath, auto_generate_ids=True)
+
+        assert len(tasks) == 4
+
+        # First two tasks should have auto-generated IDs
+        # They should use the "O" prefix and start from 011 (max is 010)
+        assert tasks[0]["task_code"] == "O-011"
+        assert tasks[0]["title"] == "Task without ID"
+        assert tasks[1]["task_code"] == "O-012"
+        assert tasks[1]["title"] == "Another task without ID"
+
+        # Existing tasks keep their IDs
+        assert tasks[2]["task_code"] == "O-010"
+        assert tasks[3]["task_code"] == "O-005"
+
+    finally:
+        Path(filepath).unlink()
+
+
+def test_auto_generate_ids_disabled():
+    """Test that tasks without IDs are skipped when auto_generate_ids=False."""
+    markdown = """## In Progress
+
+- [ ] Task without ID
+- [ ] [O-001] Task with ID
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".md") as f:
+        f.write(markdown)
+        filepath = f.name
+
+    try:
+        tasks = parse_markdown_file(filepath, auto_generate_ids=False)
+
+        assert len(tasks) == 1
+        assert tasks[0]["task_code"] == "O-001"
+
+    finally:
+        Path(filepath).unlink()
+
+
+def test_auto_generate_ids_default_prefix():
+    """Test that default prefix is used when no existing IDs."""
+    markdown = """## Backlog
+
+- [ ] Task without any ID format
+- [ ] Another task
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".md") as f:
+        f.write(markdown)
+        filepath = f.name
+
+    try:
+        tasks = parse_markdown_file(filepath, auto_generate_ids=True)
+
+        assert len(tasks) == 2
+        # Should use default prefix "TASK"
+        assert tasks[0]["task_code"] == "TASK-001"
+        assert tasks[1]["task_code"] == "TASK-002"
+
+    finally:
+        Path(filepath).unlink()
+
+
+def test_mixed_id_formats():
+    """Test parsing with both HTML comment and bracket ID formats."""
+    markdown = """## Runway
+
+- [ ] [O-001] Bracket format
+- [ ] HTML comment format <!-- TASK-002 -->
+- [ ] [PREFIX-003] Different prefix
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".md") as f:
+        f.write(markdown)
+        filepath = f.name
+
+    try:
+        tasks = parse_markdown_file(filepath)
+
+        assert len(tasks) == 3
+        assert tasks[0]["task_code"] == "O-001"
+        assert tasks[1]["task_code"] == "TASK-002"
+        assert tasks[2]["task_code"] == "PREFIX-003"
+
+    finally:
+        Path(filepath).unlink()
+
+
+def test_alternative_section_headers():
+    """Test parsing with alternative section header names."""
+    markdown = """## In Progress
+
+- [ ] Flight task <!-- TASK-001 -->
+
+## Waiting / Blocked
+
+- [ ] Blocked task <!-- TASK-002 -->
+
+## Todo
+
+- [ ] Runway task <!-- TASK-003 -->
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".md") as f:
+        f.write(markdown)
+        filepath = f.name
+
+    try:
+        tasks = parse_markdown_file(filepath)
+
+        assert len(tasks) == 3
+        assert tasks[0]["status"] == TaskStatus.FLIGHT
+        assert tasks[1]["status"] == TaskStatus.BLOCKED
+        assert tasks[2]["status"] == TaskStatus.RUNWAY
+
+    finally:
+        Path(filepath).unlink()
+
+
+def test_tags_extracted_from_title():
+    """Test that hashtags are extracted from title."""
+    markdown = """## Radar
+
+- [ ] Fix bug #urgent #backend #p1 <!-- TASK-001 -->
+"""
+
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".md") as f:
+        f.write(markdown)
+        filepath = f.name
+
+    try:
+        tasks = parse_markdown_file(filepath)
+
+        assert len(tasks) == 1
+        assert tasks[0]["title"] == "Fix bug"  # Tags removed from title
+        assert "urgent" in tasks[0]["tags"]
+        assert "backend" in tasks[0]["tags"]
+        assert "p1" in tasks[0]["tags"]
+
+    finally:
+        Path(filepath).unlink()

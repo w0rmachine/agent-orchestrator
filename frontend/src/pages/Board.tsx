@@ -114,17 +114,19 @@ export default function Board() {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        <div className="flex gap-4 overflow-x-auto pb-4">
-          {COLUMNS.map((column) => (
-            <Column
-              key={column.id}
-              id={column.id}
-              label={column.label}
-              icon={column.icon}
-              color={column.color}
-              tasks={tasksByStatus[column.id]}
-            />
-          ))}
+        <div className="-mx-4 px-4 overflow-x-auto pb-4">
+          <div className="flex gap-4 min-w-max">
+            {COLUMNS.map((column) => (
+              <Column
+                key={column.id}
+                id={column.id}
+                label={column.label}
+                icon={column.icon}
+                color={column.color}
+                tasks={tasksByStatus[column.id]}
+              />
+            ))}
+          </div>
         </div>
 
         <DragOverlay>
