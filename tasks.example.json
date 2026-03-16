@@ -1,0 +1,54 @@
+{
+  "tasks": [
+    {
+      "id": "T-DEMO1",
+      "title": "Implement user authentication",
+      "description": "Add JWT-based authentication to the API with refresh tokens",
+      "status": "in_progress",
+      "priority": "high",
+      "tags": ["backend", "security"],
+      "parent_id": null,
+      "subtask_ids": [],
+      "context": {
+        "repo": "git@github.com:org/api-server.git",
+        "branch": "feature/auth",
+        "files": ["src/auth/jwt.py", "src/auth/middleware.py", "tests/test_auth.py"]
+      },
+      "created": "2025-03-11T10:00:00Z",
+      "updated": "2025-03-11T11:30:00Z",
+      "order": 0
+    },
+    {
+      "id": "T-DEMO2",
+      "title": "Fix memory leak in worker process",
+      "description": "Worker process gradually consumes memory over 24h runtime",
+      "status": "todo",
+      "priority": "critical",
+      "tags": ["backend", "bug", "performance"],
+      "parent_id": null,
+      "subtask_ids": [],
+      "context": {
+        "repo": "git@github.com:org/worker.git",
+        "related_issue": "https://github.com/org/worker/issues/123"
+      },
+      "created": "2025-03-11T09:00:00Z",
+      "updated": "2025-03-11T09:00:00Z",
+      "order": 1
+    },
+    {
+      "id": "T-DEMO3",
+      "title": "Add OpenTelemetry tracing",
+      "description": "Instrument all API routes with OpenTelemetry for distributed tracing",
+      "status": "todo",
+      "priority": "normal",
+      "tags": ["backend", "observability"],
+      "parent_id": null,
+      "subtask_ids": [],
+      "context": {},
+      "created": "2025-03-10T14:00:00Z",
+      "updated": "2025-03-10T14:00:00Z",
+      "order": 2
+    }
+  ],
+  "updated": "2025-03-11T12:00:00Z"
+}
