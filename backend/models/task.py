@@ -51,6 +51,12 @@ class Task(SQLModel, table=True):
     # Sync metadata
     file_hash: str | None = None  # Hash of last written markdown state
     order: int = 0  # Position in markdown file
+    source: str = Field(default="manual", index=True)
+    external_id: str | None = Field(default=None, index=True)
+    external_url: str | None = None
+    external_project: str | None = Field(default=None, index=True)
+    external_updated_at: datetime | None = None
+    external_deleted: bool = False
 
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

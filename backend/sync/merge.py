@@ -34,8 +34,11 @@ def merge_task(db_task: Task | None, md_task: dict[str, Any]) -> dict[str, Any]:
     # Task exists in both: apply merge rules
     merged = {}
 
-    # Markdown wins: Title
-    merged["title"] = md_task["title"]
+    # Markdown wins: Title (except external sources)
+    if db_task.source == "youtrack":
+        merged["title"] = db_task.title
+    else:
+        merged["title"] = md_task["title"]
 
     # Markdown wins: Checkbox status
     if md_task["completed"]:
@@ -44,8 +47,11 @@ def merge_task(db_task: Task | None, md_task: dict[str, Any]) -> dict[str, Any]:
         # DB wins: Status (if not marked done in markdown)
         merged["status"] = db_task.status
 
-    # Markdown wins: Tags
-    merged["tags"] = md_task["tags"]
+    # Markdown wins: Tags (except external sources)
+    if db_task.source == "youtrack":
+        merged["tags"] = db_task.tags
+    else:
+        merged["tags"] = md_task["tags"]
 
     # DB wins: Task code
     merged["task_code"] = db_task.task_code
@@ -83,4 +89,6 @@ def should_delete_task(db_task: Task) -> bool:
     """
     # AI-generated tasks are never deleted by markdown sync
     # They can only be deleted via API
+    if db_task.source == "youtrack":
+        return False
     return not db_task.ai_generated

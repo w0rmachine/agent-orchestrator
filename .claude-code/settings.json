@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "tasks": {
+      "command": "uv",
+      "args": ["run", "mcp-server"],
+      "cwd": "/home/mwu/Work/Projects/agent-orchestrator"
+    }
+  }
+}

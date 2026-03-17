@@ -1,3 +1,20 @@
-obsidian_todo_path: ~/Documents/notes/Work/TODO.md
+obsidian_vault_root: ~/Documents/notes
+projects:
+  - name: Work
+    kanban_path: notes/Work/TODO.md
+    context:
+      - type: repo
+        value: /home/mwu/Work/Projects/agent-orchestrator
+      - type: url
+        value: https://example.com
+    youtrack:
+      url: https://youtrack.mentz.net
+      token_env: YOUTRACK_TOKEN
+      query: "for: me #Unresolved"
+      poll_seconds: 600
+  - name: Team
+    kanban_path: Work/Team.md
+    context: []
+
 simulate: true
 anthropic_api_key: ""

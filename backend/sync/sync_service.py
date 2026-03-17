@@ -5,7 +5,7 @@ from pathlib import Path
 
 from sqlmodel import Session, delete, select
 
-from backend.config import settings
+from backend.config import ProjectConfig, settings
 from backend.database import engine
 from backend.models.task import Task, TaskStatus
 from backend.models.ai_session import AISession
@@ -25,6 +25,7 @@ class SyncService:
         self.vault_path = Path(settings.obsidian_vault_path).expanduser()
         self.watcher: VaultWatcher | None = None
         self._poll_task: asyncio.Task | None = None
+        self._youtrack_tasks: list[asyncio.Task] = []
         self._last_seen_hash: str = ""
         self._switch_lock = asyncio.Lock()
         self.running = False
@@ -53,6 +54,14 @@ class SyncService:
             self.watcher.stop()
             self.watcher = None
 
+        if self._youtrack_tasks:
+            for task in self._youtrack_tasks:
+                task.cancel()
+            for task in self._youtrack_tasks:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            self._youtrack_tasks = []
+
     def _start_watchers(self):
         """Start watcher + polling tasks for current vault."""
         self.watcher = VaultWatcher(
@@ -61,11 +70,21 @@ class SyncService:
         )
         self.watcher.start()
         self._poll_task = asyncio.create_task(self._poll_for_changes())
+        self._start_youtrack_pollers()
 
     def list_available_vault_files(self) -> list[str]:
         """List available markdown vault files in current vault directory."""
-        directory = self.vault_path.parent
-        files = sorted(str(p) for p in directory.glob("*.md"))
+        configured = settings.projects
+        if configured:
+            root = settings.obsidian_vault_root
+            files = sorted(
+                str(project.resolve_kanban_path(root))
+                for project in configured
+                if project.kanban_path.lower().endswith(".md")
+            )
+        else:
+            directory = self.vault_path.parent
+            files = sorted(str(p) for p in directory.glob("*.md"))
         current = str(self.vault_path)
         if current not in files:
             files.append(current)
@@ -77,6 +96,10 @@ class SyncService:
         target = Path(new_path).expanduser()
         if target.suffix.lower() != ".md":
             raise ValueError("Vault file must be a .md file")
+        if settings.projects:
+            allowed = set(self.list_available_vault_files())
+            if str(target) not in allowed:
+                raise ValueError("Vault file is not in configured projects")
 
         async with self._switch_lock:
             if target == self.vault_path:
@@ -121,6 +144,32 @@ class SyncService:
         await self._stop_watchers()
         self.running = False
         print("Sync service stopped")
+
+    def _start_youtrack_pollers(self) -> None:
+        if self._youtrack_tasks:
+            return
+        for project in settings.projects:
+            yt = project.youtrack
+            if not yt.url or not yt.project_key:
+                continue
+            interval = max(60, int(yt.poll_seconds or 600))
+            self._youtrack_tasks.append(
+                asyncio.create_task(self._poll_youtrack_project(project, interval))
+            )
+
+    async def _poll_youtrack_project(
+        self, project: ProjectConfig, interval: int
+    ) -> None:
+        from backend.sync.youtrack_sync import sync_youtrack_project
+
+        while True:
+            try:
+                updated = await sync_youtrack_project(project)
+                if updated:
+                    await self.sync_to_vault()
+            except Exception as exc:
+                print(f"YouTrack sync failed for {project.name}: {exc}")
+            await asyncio.sleep(interval)
 
     async def _on_vault_changed(self, new_hash: str):
         """Called when vault file changes.

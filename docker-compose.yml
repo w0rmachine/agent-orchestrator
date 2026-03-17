@@ -37,16 +37,24 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/ai_kanban
       - REDIS_URL=redis://redis:6379/0
-      - OBSIDIAN_VAULT_PATH=/home/mwu/Work/notes/Work/TODO.md
+      - OBSIDIAN_VAULT_PATH=${OBSIDIAN_VAULT_PATH}
+      - YOUTRACK_TOKEN=${YOUTRACK_TOKEN}
+      - YOUTRACK_TOKEN_TEAM=${YOUTRACK_TOKEN_TEAM}
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     volumes:
       - ./backend:/app/backend
       - ./alembic.ini:/app/alembic.ini
-      - /home/mwu/Work/notes:/home/mwu/Work/notes
+      - ./config.yaml:/app/config.yaml
+      - ${OBSIDIAN_VAULT_HOST_PATH}:${OBSIDIAN_VAULT_CONTAINER_PATH}
     command: uv run uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
 
   worker:
@@ -57,7 +65,9 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/ai_kanban
       - REDIS_URL=redis://redis:6379/0
-      - OBSIDIAN_VAULT_PATH=/home/mwu/Work/notes/Work/TODO.md
+      - OBSIDIAN_VAULT_PATH=${OBSIDIAN_VAULT_PATH}
+      - YOUTRACK_TOKEN=${YOUTRACK_TOKEN}
+      - YOUTRACK_TOKEN_TEAM=${YOUTRACK_TOKEN_TEAM}
     depends_on:
       db:
         condition: service_healthy
@@ -65,8 +75,28 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app/backend
-      - /home/mwu/Work/notes:/home/mwu/Work/notes
+      - ./config.yaml:/app/config.yaml
+      - ${OBSIDIAN_VAULT_HOST_PATH}:${OBSIDIAN_VAULT_CONTAINER_PATH}
     command: uv run rq worker ai_tasks --url redis://redis:6379/0
+
+  mcp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: ai-kanban-mcp
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/ai_kanban
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - YOUTRACK_TOKEN=${YOUTRACK_TOKEN}
+      - YOUTRACK_TOKEN_TEAM=${YOUTRACK_TOKEN_TEAM}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./alembic.ini:/app/alembic.ini
+      - ./config.yaml:/app/config.yaml
+    command: uv run mcp-server
 
   frontend:
     build:
@@ -81,7 +111,8 @@ services:
     environment:
       - VITE_API_URL=http://localhost:8000
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:
