@@ -240,7 +240,8 @@ function KanbanColumn({ stage, tasks, onMove, onDropTask, onDragStage, isDropTar
       background:T.bgAlt, borderRadius:8,
       border:`1px solid ${isDropTarget ? stage.color : T.border}`,
       overflow:"hidden",
-      maxHeight:"min(52vh, 460px)",
+      height:"100%",
+      minHeight:0,
       boxShadow: isDropTarget ? `0 0 0 1px ${stage.color} inset` : "none",
     }}>
       {/* Column header */}
@@ -373,6 +374,7 @@ export default function RadarRunwayDashboard() {
   const [showMd,setShowMd]        = useState(false);
   const [mdContent,setMdContent]  = useState("");
   const logRef = useRef(null);
+  const prevTasksRef = useRef(null);
 
   const API_BASE = "http://localhost:8000";
 
@@ -397,6 +399,46 @@ export default function RadarRunwayDashboard() {
           updated: t.updated_at || t.updated,
         }));
         setTasks(mapped);
+        if (!prevTasksRef.current) {
+          prevTasksRef.current = new Map(mapped.map(t=>[t.id, t]));
+          return;
+        }
+        const prev = prevTasksRef.current;
+        const next = new Map(mapped.map(t=>[t.id, t]));
+        for (const [id, task] of next.entries()) {
+          if (!prev.has(id)) {
+            const code = task.task_code || task.id;
+            if (task.parent_task_id) {
+              const parent = next.get(task.parent_task_id);
+              const parentCode = parent?.task_code || parent?.id || "parent";
+              addLog(`Split: ${parentCode} → ${code}`);
+            } else {
+              const label = task.source === "youtrack" ? "YouTrack assigned" : "New task";
+              addLog(`${label}: ${code} — ${task.title}`);
+            }
+          }
+        }
+        for (const [id, prevTask] of prev.entries()) {
+          const task = next.get(id);
+          if (!task) continue;
+          const prevStage = taskToStage(prevTask);
+          const nextStage = taskToStage(task);
+          if (prevTask.status !== "done" && task.status === "done") {
+            const code = task.task_code || task.id;
+            addLog(`Task done: ${code} — ${task.title}`);
+            continue;
+          }
+          if (prevTask.status !== "blocked" && task.status === "blocked") {
+            const code = task.task_code || task.id;
+            addLog(`Task blocked: ${code} — ${task.title}`);
+            continue;
+          }
+          if (prevStage !== "analysis" && nextStage === "analysis") {
+            const code = task.task_code || task.id;
+            addLog(`Task to analysis: ${code} — ${task.title}`);
+          }
+        }
+        prevTasksRef.current = next;
       })
       .catch(()=>addLog("Failed to fetch tasks from /tasks"));
   },[addLog]);
@@ -479,7 +521,7 @@ export default function RadarRunwayDashboard() {
         @keyframes pulse{0%,100%{box-shadow:0 0 0 0 ${T.amber}40}70%{box-shadow:0 0 0 6px ${T.amber}00}}
       `}</style>
 
-      <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",padding:14,gap:10,background:`radial-gradient(ellipse at 20% 0%,${T.amber}08 0%,transparent 50%),${T.bg}`}}>
+      <div style={{height:"100vh",display:"flex",flexDirection:"column",padding:14,gap:10,background:`radial-gradient(ellipse at 20% 0%,${T.amber}08 0%,transparent 50%),${T.bg}`}}>
 
         {/* ── HEADER ── */}
         <div style={{display:"flex",alignItems:"center",gap:12,borderBottom:`1px solid ${T.border}`,paddingBottom:10}}>
@@ -560,20 +602,20 @@ export default function RadarRunwayDashboard() {
                 setTimeout(()=>setObSync(false),1200);
               });
             }} style={{
-              padding:"5px 12px",borderRadius:6,cursor:"pointer",
+              padding:"6px 14px",borderRadius:6,cursor:"pointer",
               background: `${T.blue}15`,
               border:`1px solid ${T.blue}`,
               color:T.blue,
-              fontSize:9,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
+              fontSize:11,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
             }}>⟲ SYNC</button>
             {/* View toggle */}
             <div style={{display:"flex",borderRadius:6,overflow:"hidden",border:`1px solid ${T.borderHi}`}}>
               {["kanban","stacks"].map(v=>(
                 <button key={v} onClick={()=>setView(v)} style={{
-                  padding:"5px 12px",border:"none",cursor:"pointer",
+                  padding:"6px 14px",border:"none",cursor:"pointer",
                   background:view===v?`${T.amber}20`:T.surface,
                   color:view===v?T.amber:T.textDim,
-                  fontSize:9,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",fontWeight:700,
+                  fontSize:11,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",fontWeight:700,
                   letterSpacing:"0.08em",
                 }}>{v.toUpperCase()}</button>
               ))}
@@ -582,10 +624,10 @@ export default function RadarRunwayDashboard() {
         </div>
 
         {/* ── MAIN CONTENT ── */}
-        <div style={{display:"grid",gridTemplateColumns:"1fr",gap:10,flex:1}}>
+        <div style={{display:"grid",gridTemplateColumns:"minmax(0, 1fr) 360px",gap:12,flex:1,minHeight:0,alignItems:"stretch"}}>
 
           {/* Left: main view */}
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          <div style={{display:"flex",flexDirection:"column",gap:10,flex:1,minHeight:0}}>
             {syncStatus && !syncStatus.vault_exists && (
               <div style={{
                 border:`1px solid ${T.red}`,
@@ -593,7 +635,7 @@ export default function RadarRunwayDashboard() {
                 color:T.red,
                 borderRadius:8,
                 padding:"10px 12px",
-                fontSize:11,
+                fontSize:12,
                 fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
               }}>
                 ⚠ Kanban file not found: {syncStatus.vault_path}
@@ -607,7 +649,7 @@ export default function RadarRunwayDashboard() {
                 color:T.red,
                 borderRadius:8,
                 padding:"10px 12px",
-                fontSize:11,
+                fontSize:12,
                 fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
               }}>
                 ⚠ Failed to parse TODO.md: {syncStatus.parse_error}
@@ -621,7 +663,7 @@ export default function RadarRunwayDashboard() {
                 color:T.amber,
                 borderRadius:8,
                 padding:"10px 12px",
-                fontSize:11,
+                fontSize:12,
                 fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
               }}>
                 ⚠ No tasks found in TODO.md ({syncStatus.vault_path}). Add task lines like: - [ ] My task
@@ -633,11 +675,12 @@ export default function RadarRunwayDashboard() {
                 background:T.bgAlt,borderRadius:10,border:`1px solid ${T.border}`,
                 padding:12,overflow:"hidden",
                 display:"flex",flexDirection:"column",
+                flex:1,minHeight:0,
               }}>
-                <div style={{fontSize:9,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em",marginBottom:10,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{fontSize:11,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em",marginBottom:10,display:"flex",alignItems:"center",gap:8}}>
                   <span style={{color:T.amber}}>◈</span> KANBAN BOARD
                   <span style={{color:T.textFaint}}>— hover card to move stage —</span>
-                  <span style={{marginLeft:"auto",color:T.purple,fontSize:8}}>syncs to Obsidian Work/TODO.md</span>
+                  <span style={{marginLeft:"auto",color:T.purple,fontSize:10}}>syncs to Obsidian Work/TODO.md</span>
                 </div>
                 <div style={{
                   display:"grid",
@@ -677,7 +720,7 @@ export default function RadarRunwayDashboard() {
               <div style={{
                 background:T.bgAlt,borderRadius:10,border:`1px solid ${T.border}`,padding:12,
               }}>
-                <div style={{fontSize:9,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em",marginBottom:10}}>
+                <div style={{fontSize:11,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em",marginBottom:10}}>
                   <span style={{color:T.amber}}>◈</span> STACK RUNWAYS
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
@@ -689,7 +732,7 @@ export default function RadarRunwayDashboard() {
                 <div style={{
                   marginTop:10,padding:"10px 14px",
                   background:T.surface,borderRadius:8,border:`1px solid ${T.border}`,
-                  fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",fontSize:10,color:T.textDim,
+                  fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",fontSize:11,color:T.textDim,
                   display:"flex",alignItems:"center",justifyContent:"center",gap:8,flexWrap:"wrap",
                 }}>
                   <span style={{color:T.amber}}>ANALYSIS</span>
@@ -711,17 +754,17 @@ export default function RadarRunwayDashboard() {
                 background:T.surface,border:`1px solid ${T.purple}40`,
                 borderRadius:10,padding:12,animation:"slideIn .2s ease",
               }}>
-                <div style={{fontSize:9,color:T.purple,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em",marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{fontSize:11,color:T.purple,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em",marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
                   <span>◈ OBSIDIAN kanban.md PREVIEW</span>
                   <span style={{color:T.textDim}}>— paste into your vault</span>
                   <button onClick={copyMd} style={{
                     marginLeft:"auto",padding:"2px 8px",borderRadius:4,cursor:"pointer",
                     background:`${T.purple}20`,border:`1px solid ${T.purple}40`,color:T.purple,
-                    fontSize:8,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
+                    fontSize:10,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
                   }}>{copied?"✓ COPIED":"⎘ COPY"}</button>
                 </div>
                 <pre style={{
-                  fontSize:9.5,color:T.text,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
+                  fontSize:11,color:T.text,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
                   overflowX:"auto",whiteSpace:"pre",lineHeight:1.6,
                   maxHeight:220,overflowY:"auto",
                 }}>{mdContent}</pre>
@@ -730,16 +773,19 @@ export default function RadarRunwayDashboard() {
 
             {/* Stack breakdown: inbox + analysis detail */}
             <div style={{
-              display:"grid",gridTemplateColumns:"160px 1fr",gap:10,
+              display:"grid",gridTemplateColumns:"120px 1fr",gap:10,
+              flexShrink:0,alignItems:"start",
             }}>
               {/* Radar */}
               <div style={{
                 background:T.surface,border:`1px solid ${T.border}`,
-                borderRadius:10,padding:12,display:"flex",flexDirection:"column",alignItems:"center",gap:8,
+                borderRadius:10,padding:8,display:"flex",flexDirection:"column",alignItems:"center",gap:6,
               }}>
-                <div style={{fontSize:9,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em"}}>⊙ RADAR SWEEP</div>
-                <RadarSweep tasks={tasks}/>
-                <div style={{fontSize:8,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",textAlign:"center"}}>
+                <div style={{fontSize:10,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em"}}>⊙ RADAR</div>
+                <div style={{transform:"scale(0.85)"}}>
+                  <RadarSweep tasks={tasks}/>
+                </div>
+                <div style={{fontSize:9,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",textAlign:"center"}}>
                   {tasks.filter(t=>t.stage==="inbox").length} signals detected
                 </div>
               </div>
@@ -747,68 +793,69 @@ export default function RadarRunwayDashboard() {
               {/* Manager analysis queue */}
               <div style={{
                 background:T.surface,border:`1px solid ${T.border}`,
-                borderRadius:10,padding:"10px 12px",
+                borderRadius:10,padding:"8px 10px",
+                maxHeight:220,overflowY:"auto",
               }}>
-                <div style={{fontSize:9,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em",marginBottom:8}}>
+                <div style={{fontSize:10,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em",marginBottom:6}}>
                   <span style={{color:T.amber}}>◎</span> ANALYSIS QUEUE
-                  <span style={{marginLeft:6,color:T.textFaint,fontSize:8}}>(decomposing into subtasks)</span>
+                  <span style={{marginLeft:6,color:T.textFaint,fontSize:9}}>(decomposing into subtasks)</span>
                 </div>
                 {tasks.filter(t=>t.stage==="analysis").map(t=>(
                   <div key={t.id} style={{
-                    display:"flex",alignItems:"center",gap:8,padding:"5px 8px",
-                    borderLeft:`2px solid ${T.amber}`,marginBottom:5,
+                    display:"flex",alignItems:"center",gap:8,padding:"4px 6px",
+                    borderLeft:`2px solid ${T.amber}`,marginBottom:4,
                     background:`${T.amber}08`,borderRadius:"0 4px 4px 0",
                   }}>
                     <span style={{
-                      fontSize:9,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",color:T.amber,
+                      fontSize:10,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",color:T.amber,
                       animation:"blink 1.4s ease-in-out infinite",
                     }}>◎</span>
-                    <span style={{fontSize:10,color:T.text,flex:1}}>{t.title}</span>
+                    <span style={{fontSize:11,color:T.text,flex:1}}>{t.title}</span>
                     {t.priority==="high" && <Pill color={T.red} sm>HIGH</Pill>}
                     <button onClick={()=>moveTask(t.id,"backlog")} style={{
-                      fontSize:8,padding:"2px 7px",borderRadius:3,cursor:"pointer",
+                      fontSize:9,padding:"2px 6px",borderRadius:3,cursor:"pointer",
                       background:`${T.green}15`,border:`1px solid ${T.green}40`,color:T.green,
                       fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",
                     }}>→ backlog</button>
                   </div>
                 ))}
                 {tasks.filter(t=>t.stage==="analysis").length===0 && (
-                  <div style={{fontSize:9,color:T.textFaint,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",padding:"8px 0"}}>— analysis queue empty —</div>
+                  <div style={{fontSize:10,color:T.textFaint,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",padding:"6px 0"}}>— analysis queue empty —</div>
                 )}
               </div>
             </div>
           </div>
 
           {/* ── Right: Log panel ── */}
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          <div style={{display:"flex",flexDirection:"column",gap:10,flex:1,minHeight:0}}>
 
             {/* Live log */}
             <div style={{
               background:T.surface,border:`1px solid ${T.border}`,
-              borderRadius:10,overflow:"hidden",flex:1,display:"flex",flexDirection:"column",
+              borderRadius:10,overflow:"hidden",flex:1,minHeight:0,display:"flex",flexDirection:"column",
             }}>
               <div style={{
                 padding:"9px 12px",borderBottom:`1px solid ${T.border}`,
                 display:"flex",alignItems:"center",gap:6,flexShrink:0,
               }}>
                 <span style={{width:6,height:6,borderRadius:"50%",background:T.green,animation:"breathe 1s infinite",display:"block"}}/>
-                <span style={{fontSize:9,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em"}}>LIVE LOG</span>
-                <span style={{marginLeft:"auto",fontSize:8,color:T.textFaint,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace"}}>{logs.length} entries</span>
+                <span style={{fontSize:11,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",letterSpacing:"0.1em"}}>LIVE LOG</span>
+                <span style={{marginLeft:"auto",fontSize:10,color:T.textFaint,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace"}}>{logs.length} entries</span>
               </div>
-              <div ref={logRef} style={{flex:1,overflowY:"auto",padding:"8px 10px",minHeight:300,maxHeight:420}}>
+              <div ref={logRef} style={{flex:1,overflowY:"auto",padding:"8px 10px",minHeight:0}}>
                 {logs.map(l=>(
                   <div key={l.id} style={{
                     display:"flex",gap:6,padding:"2.5px 0",
                     animation:"slideIn .2s ease",
                     borderBottom:`1px solid ${T.textFaint}`,
                   }}>
-                    <span style={{fontSize:8,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",flexShrink:0,lineHeight:1.8}}>{fmtTime(l.ts)}</span>
+                    <span style={{fontSize:10,color:T.textDim,fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",flexShrink:0,lineHeight:1.8}}>{fmtTime(l.ts)}</span>
                     <span style={{
-                      fontSize:8,color:srcColor[l.src]||T.textDim,
+                      fontSize:10,color:srcColor[l.src]||T.textDim,
                       fontFamily:"'JetBrains Mono', 'SFMono-Regular', ui-monospace, monospace",fontWeight:700,
                       flexShrink:0,width:30,lineHeight:1.8,
                     }}>{srcLabel[l.src]||"SYS "}</span>
-                    <span style={{fontSize:9.5,color:T.text,lineHeight:1.6}}>{l.msg}</span>
+                    <span style={{fontSize:11,color:T.text,lineHeight:1.6}}>{l.msg}</span>
                   </div>
                 ))}
               </div>

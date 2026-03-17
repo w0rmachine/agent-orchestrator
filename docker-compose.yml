@@ -79,25 +79,6 @@ services:
       - ${OBSIDIAN_VAULT_HOST_PATH}:${OBSIDIAN_VAULT_CONTAINER_PATH}
     command: uv run rq worker ai_tasks --url redis://redis:6379/0
 
-  mcp:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.backend
-    container_name: ai-kanban-mcp
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/ai_kanban
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - YOUTRACK_TOKEN=${YOUTRACK_TOKEN}
-      - YOUTRACK_TOKEN_TEAM=${YOUTRACK_TOKEN_TEAM}
-    depends_on:
-      db:
-        condition: service_healthy
-    volumes:
-      - ./backend:/app/backend
-      - ./alembic.ini:/app/alembic.ini
-      - ./config.yaml:/app/config.yaml
-    command: uv run mcp-server
-
   frontend:
     build:
       context: .

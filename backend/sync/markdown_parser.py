@@ -8,11 +8,11 @@ from backend.tagging import sanitize_tags
 # Regex patterns
 TASK_RE = re.compile(r"^(\s*)- \[([x ])\] (.+)$")
 # Match TASK-001, TASK-001-A, TASK-001-B-1, etc. in HTML comments
-ID_RE = re.compile(r"<!--\s*([A-Z]+-\d+(?:-[A-Z0-9]+)*)\s*-->")
+ID_RE = re.compile(r"<!--\s*([A-Z]+-\d+(?:-[A-Z0-9]+)*)\s*-->", re.IGNORECASE)
 # Match [O-001], [TASK-001], etc. in brackets at start of title
-BRACKET_ID_RE = re.compile(r"^\[([A-Z]+-\d+(?:-[A-Z0-9]+)*)\]")
+BRACKET_ID_RE = re.compile(r"^\[([A-Z]+-\d+(?:-[A-Z0-9]+)*)\]", re.IGNORECASE)
 # Extract numeric part from task ID (e.g., "O-023" -> 23)
-ID_NUMBER_RE = re.compile(r"^([A-Z]+)-(\d+)")
+ID_NUMBER_RE = re.compile(r"^([A-Z]+)-(\d+)", re.IGNORECASE)
 TAG_RE = re.compile(r"#(\w+)")
 
 # Default prefix for auto-generated IDs
@@ -43,12 +43,12 @@ def extract_task_id(line: str) -> str | None:
     # Try HTML comment first
     match = ID_RE.search(line)
     if match:
-        return match.group(1)
+        return match.group(1).upper()
 
     # Try bracket notation
     match = BRACKET_ID_RE.search(line)
     if match:
-        return match.group(1)
+        return match.group(1).upper()
 
     return None
 

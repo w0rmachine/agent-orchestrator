@@ -1,20 +1,35 @@
 # Project Context (Session Handoff)
 
-Updated: 2026-03-16
+Updated: 2026-03-17
 
 ## Current Source of Truth
 - Tasks are stored in Postgres (`backend.models.task.Task`).
 - Obsidian Kanban file is synced via `backend/sync/sync_service.py`.
-- Active vault path in compose: `/home/mwu/Work/notes/Work/TODO.md`.
+- Active vault path in compose: `/notes/Work/TODO.md` (host mount: `/home/mwu/Documents/notes`).
+- YouTrack is read-only source; issues are imported into DB and written to kanban.
 
 ## Important Recent Changes
+- Projects config
+  - `config.yaml` now defines `projects[]` with `kanban_path`, `context[]`, and optional `youtrack` config.
+  - `obsidian_kanban_paths` and `obsidian_todo_path` are removed.
+  - `obsidian_vault_root` is used to resolve relative `kanban_path`.
+  - `pyyaml` added to dependencies to parse `config.yaml`.
+- YouTrack integration
+  - Read-only polling into DB (`backend/sync/youtrack_sync.py` + `backend/integrations/youtrack.py`).
+  - Default query: `for: me #Unresolved` (configurable per project via `youtrack.query`).
+  - New task fields: `source`, `external_id`, `external_url`, `external_project`, `external_updated_at`, `external_deleted`.
+  - Case-insensitive ID parsing + normalization prevents duplicate O-IDs for mixed-case YouTrack IDs.
+  - Duplicate auto-generated tasks with embedded YouTrack IDs are removed on sync.
+
 - `docker-compose.yml`
   - Uses fully qualified images:
     - `docker.io/library/postgres:16`
     - `docker.io/library/redis:7-alpine`
+  - `api`, `worker`, `mcp` mount `config.yaml` into `/app/config.yaml`.
   - `api` and `worker` now set:
-    - `OBSIDIAN_VAULT_PATH=/home/mwu/Work/notes/Work/TODO.md`
-  - Notes mount is `/home/mwu/Work/notes:/home/mwu/Work/notes`.
+    - `OBSIDIAN_VAULT_PATH=/notes/Work/TODO.md`
+  - Notes mount is `/home/mwu/Documents/notes:/notes`.
+  - YouTrack token envs are passed into containers.
 
 - Markdown sync reliability
   - Added polling fallback in `backend/sync/sync_service.py` (2s hash check) because file watch events can be missed on mounted volumes.
@@ -43,24 +58,27 @@ Updated: 2026-03-16
     - parse errors
     - empty task set
   - Kanban layout updates:
-    - columns fill board width
+    - columns fill board width and auto-resize to remaining height
     - per-column scroll for long lists
     - drag & drop between columns enabled
     - move buttons removed
     - task card shows grey task ID pill (`task_code`)
     - top duplicate stage counter row removed
     - stats panel removed
-    - live log moved below radar section
+  - Live log enhancements:
+    - log new tasks, YouTrack assignments, splits, done/blocked, and moves into analysis
 
 ## Operational Commands
 - Start stack:
-  - `podman compose up -d`
+  - `docker compose up -d`
 - Restart after config/code changes:
-  - `podman compose down && podman compose up -d`
+  - `docker compose down && docker compose up -d`
 - Check API tasks:
   - `curl http://localhost:8000/tasks/`
 - Check sync status:
   - `curl http://localhost:8000/sync/status`
+ - Run DB migrations in container:
+  - `docker compose exec api uv run alembic upgrade head`
 
 ## Codex MCP Registration (current)
 - Use DB-backed MCP server (no `TASK_STORE_PATH` needed):

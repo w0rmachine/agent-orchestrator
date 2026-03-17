@@ -29,10 +29,6 @@ test-mcp:
 mcp-validate-prompt:
 	@echo "Validate the agent-orchestrator MCP live using the PROJECT_CONTEXT.md MCP checklist. Create, read, update, filter, complete, block, and delete a temporary task and verify markdown sync expectations."
 
-# Add MCP to Codex using the running container (stdio over podman compose exec)
-mcp-add-docker:
-	codex mcp add agent-orchestrator -- podman compose exec -T mcp uv run mcp-server
-
-# Add MCP to Codex using docker compose run (stdio; no long-running container)
-mcp-add-docker-compose:
-	codex mcp add agent-orchestrator -- docker compose run --rm -T mcp uv run mcp-server
+# Add MCP to Codex from local repo (stdio)
+mcp-add-local:
+	codex mcp add agent-orchestrator -- bash -lc "cd $(pwd) && uv run mcp-server"

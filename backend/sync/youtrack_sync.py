@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from backend.config import ProjectConfig
@@ -91,6 +92,19 @@ async def sync_youtrack_project(project: ProjectConfig) -> int:
             task.external_deleted = False
             session.add(task)
             updated_count += 1
+
+            duplicates = session.exec(
+                select(Task).where(
+                    Task.source != "youtrack",
+                    Task.task_code != item["external_id"],
+                    or_(
+                        Task.title.ilike(f"%<!-- {item['external_id']} -->%"),
+                        Task.title.ilike(f"%[{item['external_id']}]%"),
+                    ),
+                )
+            ).all()
+            for dup in duplicates:
+                session.delete(dup)
 
         if existing:
             _mark_missing_as_done(session, existing, seen_ids)

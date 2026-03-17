@@ -93,7 +93,7 @@ def normalize_issue(
     base_url: str,
     project_key: str,
 ) -> dict[str, Any]:
-    issue_id = issue.get("idReadable") or ""
+    issue_id = (issue.get("idReadable") or "").upper()
     summary = issue.get("summary") or ""
     description = issue.get("description") or ""
     status = _map_status(_extract_custom_field(issue, "State", "Status"))
