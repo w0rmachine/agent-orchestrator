@@ -171,6 +171,72 @@ def move(task_code: str, status: str):
 
 
 @app.command()
+def suggest(
+    limit: int = typer.Option(10, help="Number of tasks to show"),
+):
+    """Suggest relevant tasks for current repository."""
+    repo_path = get_current_repo()
+
+    if not repo_path:
+        console.print("[red]Not in a git repository.[/red]")
+        console.print("[dim]Navigate to a repo or use 'kanban next' for global tasks.[/dim]")
+        sys.exit(1)
+
+    import httpx
+
+    response = httpx.get(
+        f"{API_BASE}/tasks/suggest",
+        params={"repo_path": repo_path, "limit": limit},
+        timeout=10.0,
+    )
+
+    if response.status_code != 200:
+        console.print(f"[red]Error: {response.status_code}[/red]")
+        sys.exit(1)
+
+    tasks = response.json()
+
+    if not tasks:
+        console.print(f"\n[yellow]No tasks found for this repository.[/yellow]")
+        console.print(f"[dim]Path: {repo_path}[/dim]")
+        console.print("\n[dim]Tip: Register this repo with 'kanban env add'[/dim]\n")
+        return
+
+    table = Table(title=f"Suggested Tasks for {Path(repo_path).name}")
+    table.add_column("Code", style="cyan", no_wrap=True)
+    table.add_column("Title", style="white")
+    table.add_column("Status", style="yellow")
+    table.add_column("Priority", style="magenta", justify="center")
+    table.add_column("Time", style="dim", justify="right")
+
+    for task in tasks:
+        status = task["status"].upper()
+        priority = str(task["priority"]) if task.get("priority") else "-"
+
+        # Format time estimate
+        if task.get("estimated_minutes"):
+            mins = task["estimated_minutes"]
+            if mins >= 60:
+                time_str = f"{mins // 60}h {mins % 60}m" if mins % 60 else f"{mins // 60}h"
+            else:
+                time_str = f"{mins}m"
+        else:
+            time_str = "?"
+
+        table.add_row(
+            task["task_code"],
+            task["title"][:60],  # Truncate long titles
+            status,
+            priority,
+            time_str,
+        )
+
+    console.print("\n")
+    console.print(table)
+    console.print(f"\n[dim]Showing {len(tasks)} tasks • Use 'kanban focus' to start the top task[/dim]\n")
+
+
+@app.command()
 def log():
     """Show recent AI activity log."""
     result = call_mcp_tool("get_ai_activity", {"limit": 20})
@@ -239,13 +305,20 @@ def env_add(
         json={
             "name": name,
             "repo_path": repo_path,
-            "tech_stack": [],
+            # Let API auto-detect tech stack
         },
     )
 
     if response.status_code == 201:
+        env = response.json()
         console.print(f"\n[bold green]✓[/bold green] Registered environment: {name}\n")
-        console.print(f"[dim]Path: {repo_path}[/dim]\n")
+        console.print(f"[dim]Path: {repo_path}[/dim]")
+
+        tech_stack = env.get("tech_stack", [])
+        if tech_stack:
+            console.print(f"[dim]Detected: {', '.join(tech_stack)}[/dim]")
+
+        console.print()
     else:
         console.print(f"[red]Error: {response.status_code}[/red]")
 

@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 
 from backend.database import get_session
 from backend.models.environment import Environment
+from backend.repo_analyzer import RepoAnalyzer
 
 router = APIRouter(prefix="/environments", tags=["environments"])
 
@@ -59,11 +60,17 @@ def create_environment(
     session: Annotated[Session, Depends(get_session)],
 ) -> Environment:
     """Create a new environment."""
+    # Auto-detect tech stack if not provided
+    tech_stack = data.tech_stack
+    if not tech_stack:
+        analyzer = RepoAnalyzer(data.repo_path)
+        tech_stack = analyzer.detect_tech_stack()
+
     environment = Environment(
         name=data.name,
         repo_path=data.repo_path,
         git_url=data.git_url,
-        tech_stack=data.tech_stack,
+        tech_stack=tech_stack,
         default_branch=data.default_branch,
     )
 
@@ -106,3 +113,22 @@ def delete_environment(
 
     session.delete(environment)
     session.commit()
+
+
+@router.post("/{environment_id}/analyze")
+def analyze_environment(
+    environment_id: UUID,
+    session: Annotated[Session, Depends(get_session)],
+) -> Environment:
+    """Re-analyze environment to update tech stack and file tree."""
+    environment = session.get(Environment, environment_id)
+    if not environment:
+        raise HTTPException(status_code=404, detail="Environment not found")
+
+    analyzer = RepoAnalyzer(environment.repo_path)
+    environment.tech_stack = analyzer.detect_tech_stack()
+
+    session.add(environment)
+    session.commit()
+    session.refresh(environment)
+    return environment

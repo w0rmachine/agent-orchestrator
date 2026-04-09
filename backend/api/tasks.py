@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from backend.database import get_session
+from backend.models.environment import Environment
 from backend.models.task import Task, TaskStatus
 from backend.models.task_event import TaskEvent, TaskEventType
 from backend.tagging import sanitize_tags
@@ -168,6 +169,71 @@ def list_tasks(
         query = query.where(Task.environment_id == environment_id)
     if parent_task_id is not None:
         query = query.where(Task.parent_task_id == parent_task_id)
+
+    tasks = session.exec(query).all()
+    return [_to_response(t) for t in tasks]
+
+
+@router.get("/suggest", response_model=list[TaskResponse])
+def suggest_tasks(
+    session: Annotated[Session, Depends(get_session)],
+    repo_path: str = Query(..., description="Repository path to get suggestions for"),
+    limit: int = Query(10, ge=1, le=50, description="Maximum number of tasks to return"),
+) -> list[TaskResponse]:
+    """Get task suggestions for a specific repository context.
+
+    This endpoint finds tasks relevant to the given repository path by:
+    1. Matching the repo_path to an environment
+    2. Filtering tasks by that environment
+    3. Prioritizing by status (RUNWAY > RADAR > FLIGHT) and priority
+
+    Args:
+        repo_path: Path to the repository
+        limit: Maximum number of tasks to return (1-50)
+
+    Returns:
+        List of suggested tasks sorted by relevance
+    """
+    # Normalize repo path
+    from pathlib import Path
+    normalized_path = str(Path(repo_path).expanduser().resolve())
+
+    # Find matching environment
+    environment = session.exec(
+        select(Environment).where(Environment.repo_path == normalized_path)
+    ).first()
+
+    if not environment:
+        # No environment found - return empty list or global tasks
+        query = select(Task).where(Task.environment_id.is_(None))
+    else:
+        # Filter by environment
+        query = select(Task).where(Task.environment_id == environment.id)
+
+    # Filter to active statuses (not DONE, not BLOCKED)
+    query = query.where(
+        Task.status.in_([TaskStatus.RUNWAY, TaskStatus.RADAR, TaskStatus.FLIGHT])
+    )
+
+    # Order by relevance:
+    # 1. RUNWAY tasks (ready to start) - highest priority
+    # 2. Priority (1 = highest, 5 = lowest)
+    # 3. RADAR tasks (backlog)
+    # 4. FLIGHT tasks (already in progress)
+    from sqlalchemy import case
+
+    status_priority = case(
+        (Task.status == TaskStatus.RUNWAY, 1),
+        (Task.status == TaskStatus.RADAR, 2),
+        (Task.status == TaskStatus.FLIGHT, 3),
+        else_=4
+    )
+
+    query = query.order_by(
+        status_priority,
+        Task.priority.asc().nulls_last(),  # Lower number = higher priority
+        Task.created_at.asc(),  # Older tasks first
+    ).limit(limit)
 
     tasks = session.exec(query).all()
     return [_to_response(t) for t in tasks]
